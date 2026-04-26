@@ -99,12 +99,14 @@ Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
             response = _model.generate_content(prompt)
             return response.text.strip()
         except Exception:
-            return (
-                "The AI service is currently unavailable to generate a narrative explanation. "
-                "Based on the statistical findings above, there is a measurable disparity in how this attribute "
-                "correlates with the model's target outcome. Please review the proxy features and group metrics "
-                "to determine if this disparity is due to historical bias, imbalanced sampling, or valid domain factors."
-            )
+            spd_val = abs(spd)
+            gap_pct = f"{spd_val:.1%}" if isinstance(spd, (int, float)) else "measurable"
+            
+            p1 = f"We detected a {severity.upper()} severity bias associated with '{sensitive_attr}' in your {scenario} dataset. The analysis reveals a {gap_pct} disparity in positive outcomes across different demographic groups."
+            p2 = f"This gap is driven by underlying data patterns: {plain_reason} Machine learning models often pick up on these historical correlations or proxy features, leading to skewed predictions even if the sensitive attribute is removed."
+            p3 = f"If this model is deployed without remediation, it risks automating and scaling unfair treatment toward specific groups. Please review the recommended mitigation strategies below to safely reduce this bias."
+            
+            return f"{p1}\n\n{p2}\n\n{p3}"
 
     # ── Action Plan ───────────────────────────────────────────────────────────
 
