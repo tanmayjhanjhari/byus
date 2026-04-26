@@ -7,6 +7,7 @@ import HomePage from "./pages/HomePage";
 import RemediatePage from "./pages/RemediatePage";
 import ReportPage from "./pages/ReportPage";
 import ResultsPage from "./pages/ResultsPage";
+import ErrorBoundary from "./components/Layout/ErrorBoundary";
 
 // Page transition wrapper — applied per-route inside AnimatePresence
 const PageTransition = ({ children }) => (
@@ -48,7 +49,9 @@ const AnimatedRoutes = () => {
           path="/results"
           element={
             <PageTransition>
-              <ResultsPage />
+              <ErrorBoundary>
+                <ResultsPage />
+              </ErrorBoundary>
             </PageTransition>
           }
         />
@@ -56,7 +59,9 @@ const AnimatedRoutes = () => {
           path="/remediate"
           element={
             <PageTransition>
-              <RemediatePage />
+              <ErrorBoundary>
+                <RemediatePage />
+              </ErrorBoundary>
             </PageTransition>
           }
         />

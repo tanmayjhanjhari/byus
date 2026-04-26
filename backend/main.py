@@ -6,11 +6,14 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from routers import upload, analyze, mitigate, report, gemini_chat, explain
 
+# Load environment variables
 load_dotenv()
 
 
@@ -20,6 +23,25 @@ async def lifespan(app: FastAPI):
     app.state.sessions = {}
     yield
     # Nothing to clean up on shutdown for in-memory store
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": True, "detail": str(exc), "code": 500}
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    content = {"error": True, "detail": str(exc.detail), "code": exc.status_code}
+    if exc.status_code == 503:
+        content["fallback"] = True
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content
+    )
 
 
 def create_app() -> FastAPI:

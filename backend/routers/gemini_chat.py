@@ -68,7 +68,7 @@ async def detect_scenario(
         result = gemini.detect_scenario(columns=body.columns)
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Gemini API error during scenario detection: {exc}",
         )
 
@@ -139,7 +139,7 @@ async def gemini_explain(
         )
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Gemini API error: {exc}",
         )
 
@@ -225,7 +225,7 @@ async def gemini_chat(
         )
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Gemini API error: {exc}",
         )
 

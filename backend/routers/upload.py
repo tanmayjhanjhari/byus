@@ -55,7 +55,7 @@ async def upload_csv(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Could not parse CSV: {exc}",
+            detail="Invalid CSV format",
         )
 
     if df.empty:
@@ -142,7 +142,7 @@ async def upload_model(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Could not deserialise model: {exc}",
+            detail="Could not load model file",
         )
 
     # ── Validate that the model has a predict method ──────────────────────────

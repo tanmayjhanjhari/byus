@@ -62,6 +62,13 @@ export default function ResultsPage() {
            // Now run gemini-explain in parallel
            const geminiPromises = sensitiveAttrs.map(attr => 
              client.post("/api/gemini-explain", { session_id: sessionId, sensitive_attr: attr })
+               .catch(err => {
+                 if (err.response?.status === 503) {
+                   const fallbackReason = explanationsObj[attr]?.plain_reason || "No rule-based explanation available.";
+                   return { data: { explanation: `AI Copilot unavailable — showing rule-based explanation instead.\n\n${fallbackReason}` } };
+                 }
+                 throw err;
+               })
            );
            const geminiResults = await Promise.allSettled(geminiPromises);
            
