@@ -1,4 +1,4 @@
-# FairLens — Requirements Document
+# ByUs — Requirements Document
 
 > **Version:** 1.0.0 | **Date:** 2026-04-26 | **Status:** Active Development
 
@@ -6,9 +6,9 @@
 
 ## 1. Project Overview
 
-**FairLens** is an open-source web platform designed to detect, explain, and mitigate bias in datasets and machine learning models. It leverages **Google Gemini 2.0 Flash** as its AI backbone to provide plain-English explanations, scenario auto-detection, and a conversational Bias Copilot — making algorithmic fairness accessible to data scientists, auditors, and non-technical stakeholders alike.
+**ByUs** is an open-source web platform designed to detect, explain, and mitigate bias in datasets and machine learning models. It leverages **Google Gemini 2.0 Flash** as its AI backbone to provide plain-English explanations, scenario auto-detection, and a conversational Bias Copilot — making algorithmic fairness accessible to data scientists, auditors, and non-technical stakeholders alike.
 
-FairLens bridges the gap between raw fairness metrics and actionable insights by combining established fairness libraries (Fairlearn, scikit-learn) with large language model reasoning, delivering results through an intuitive visual dashboard and exportable PDF audit reports.
+ByUs bridges the gap between raw fairness metrics and actionable insights by combining established fairness libraries (Fairlearn, scikit-learn) with large language model reasoning, delivering results through an intuitive visual dashboard and exportable PDF audit reports.
 
 **Target Users:**
 - Data Scientists auditing model fairness pre-deployment
@@ -132,7 +132,7 @@ FairLens bridges the gap between raw fairness metrics and actionable insights by
   - **Page 4 — Recommendations**: Gemini-generated remediation guidance, proxy features list, next steps
 - Generated using **ReportLab** (Python backend)
 - Download triggered via `GET /api/report/{session_id}` endpoint
-- Report named: `fairlens_audit_{session_id}_{timestamp}.pdf`
+- Report named: `byus_audit_{session_id}_{timestamp}.pdf`
 
 ### Feature 15 — Gemini Bias Copilot (Floating Chat Assistant)
 - Persistent floating chat widget accessible from any page
@@ -258,14 +258,14 @@ All endpoints are prefixed with `/api`. Base URL in development: `http://localho
 
 **`GET /api/report/{session_id}`**
 - Response: Binary PDF stream with `Content-Disposition: attachment` header
-- File Name: `fairlens_audit_{session_id}_{timestamp}.pdf`
+- File Name: `byus_audit_{session_id}_{timestamp}.pdf`
 
 ---
 
 ## 5. Project Folder Structure
 
 ```
-fairlens/
+byus/
 |
 +-- frontend/
 |   +-- public/
@@ -309,7 +309,7 @@ fairlens/
 |   |   +-- store/
 |   |   |   +-- useAnalysisStore.js
 |   |   +-- api/
-|   |   |   +-- fairlensApi.js
+|   |   |   +-- byusApi.js
 |   |   +-- utils/
 |   |   |   +-- formatMetrics.js
 |   |   |   +-- severityHelpers.js
@@ -408,7 +408,7 @@ docs: update README with environment variable setup
 ### Initial Repository Setup Commands
 ```bash
 git init
-git remote add origin https://github.com/tanmayjhanjhari/fairlens.git
+git remote add origin https://github.com/tanmayjhanjhari/byus.git
 git checkout -b dev
 git checkout -b feature/part-0
 git add .

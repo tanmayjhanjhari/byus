@@ -1,4 +1,4 @@
-# FairLens — Demo Script
+# ByUs — Demo Script
 
 > **3-Minute Demo for Judges**
 > Showcases all major platform features end-to-end using the included `credit_bias.csv` sample dataset.
@@ -165,7 +165,7 @@
 
 **What to point out:**
 - PDF generates server-side in ~2 seconds
-- File downloads as: `fairlens_audit_{session_id}_{timestamp}.pdf`
+- File downloads as: `byus_audit_{session_id}_{timestamp}.pdf`
 - Report contains 4 pages:
   - **Page 1**: Dataset summary — 1,000 rows, 7 columns, Lending scenario, binary classification
   - **Page 2**: Bias findings — all metric values with severity labels, Audit Score 34/100 grade F
@@ -177,7 +177,7 @@
 
 ## Key Talking Points for Judges
 
-1. **End-to-End**: FairLens covers the full fairness audit lifecycle — detect, explain, mitigate, report
+1. **End-to-End**: ByUs covers the full fairness audit lifecycle — detect, explain, mitigate, report
 2. **Gemini Integration**: Three distinct Gemini use cases: scenario detection, explanation engine, Copilot chat
 3. **Legal Alignment**: DI threshold of 0.8 aligns with EEOC 80% rule and EU AI Act requirements
 4. **No Bias Expertise Required**: Plain-English explanations and tooltips make the platform accessible to non-technical users
@@ -190,7 +190,7 @@
 
 ```bash
 git init
-git remote add origin https://github.com/tanmayjhanjhari/fairlens.git
+git remote add origin https://github.com/tanmayjhanjhari/byus.git
 git checkout -b dev
 git checkout -b feature/part-0
 git add .

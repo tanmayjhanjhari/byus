@@ -1,4 +1,4 @@
-# FairLens
+# ByUs
 
 > **Detect. Explain. Mitigate.** AI-powered bias detection for datasets and ML models using Google Gemini 2.0 Flash.
 
@@ -9,9 +9,9 @@
 
 ---
 
-## What is FairLens?
+## What is ByUs?
 
-FairLens is an open-source web platform that helps you detect, understand, and fix bias in your datasets and machine learning models. Upload a CSV, select your target variable and sensitive attributes, and FairLens will:
+ByUs is an open-source web platform that helps you detect, understand, and fix bias in your datasets and machine learning models. Upload a CSV, select your target variable and sensitive attributes, and ByUs will:
 
 - Compute industry-standard fairness metrics (SPD, DI, EOD, AOD)
 - Auto-detect your dataset's domain (hiring, lending, healthcare, education) using Gemini AI
@@ -36,7 +36,7 @@ FairLens is an open-source web platform that helps you detect, understand, and f
 ### 1. Navigate to the backend directory
 
 ```bash
-cd fairlens/backend
+cd byus/backend
 ```
 
 ### 2. Create and activate a virtual environment
@@ -92,7 +92,7 @@ Interactive API docs: `http://localhost:8000/docs`
 ### 1. Navigate to the frontend directory
 
 ```bash
-cd fairlens/frontend
+cd byus/frontend
 ```
 
 ### 2. Install dependencies
@@ -146,14 +146,14 @@ Open two terminal windows:
 
 **Terminal 1 (Backend):**
 ```bash
-cd fairlens/backend
+cd byus/backend
 venv\Scripts\activate   # or source venv/bin/activate on macOS/Linux
 uvicorn main:app --reload
 ```
 
 **Terminal 2 (Frontend):**
 ```bash
-cd fairlens/frontend
+cd byus/frontend
 npm run dev
 ```
 
@@ -162,7 +162,7 @@ npm run dev
 ## Project Structure
 
 ```
-fairlens/
+byus/
 +-- frontend/          # React 18 + Vite frontend
 +-- backend/           # FastAPI backend
 +-- REQUIREMENTS.md    # Full requirements documentation
