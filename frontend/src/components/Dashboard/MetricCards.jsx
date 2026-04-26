@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import MetricTooltip from "../Onboarding/MetricTooltip";
 
 const SEVERITY_COLORS = {
@@ -28,6 +28,11 @@ function Card({ title, term, value, isWarning, delay }) {
         <span className="text-4xl font-bold text-textPrimary">
           {value !== undefined && value !== null ? Number(value).toFixed(3) : "N/A"}
         </span>
+        {(value === undefined || value === null) && (
+          <div className="mb-1" title="Upload a trained ML model (.pkl) alongside your dataset to compute model-based metrics like EOD and AOD.">
+            <Info size={16} className="text-textSecondary cursor-help" />
+          </div>
+        )}
       </div>
 
       {isWarning && (

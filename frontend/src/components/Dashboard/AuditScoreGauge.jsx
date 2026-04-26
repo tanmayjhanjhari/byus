@@ -2,7 +2,14 @@ import { animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { useEffect, useState } from "react";
 import MetricTooltip from "../Onboarding/MetricTooltip";
 
-export default function AuditScoreGauge({ score, grade }) {
+function getGrade(score) {
+  if (score >= 90) return { grade: 'A', label: 'Fair', color: '#22C55E' }
+  if (score >= 75) return { grade: 'B', label: 'Minor Issues', color: '#84CC16' }
+  if (score >= 55) return { grade: 'C', label: 'Moderate Bias', color: '#F59E0B' }
+  return { grade: 'F', label: 'High Bias — Action Required', color: '#EF4444' }
+}
+
+export default function AuditScoreGauge({ score }) {
   const [displayScore, setDisplayScore] = useState(0);
   const motionScore = useMotionValue(0);
 
@@ -24,9 +31,8 @@ export default function AuditScoreGauge({ score, grade }) {
     return controls.stop;
   }, [score, motionScore]);
 
-  let color = "#EF4444"; // Red (F)
-  if (score > 75) color = "#22C55E"; // Green (A)
-  else if (score > 50) color = "#F59E0B"; // Amber (B/C)
+  const gradeInfo = getGrade(score || 0);
+  const color = gradeInfo.color;
 
   return (
     <div className="flex flex-col items-center">
@@ -63,7 +69,10 @@ export default function AuditScoreGauge({ score, grade }) {
             {displayScore}
           </span>
           <span className="text-xl font-semibold text-textSecondary mt-1">
-            Grade {grade || "?"}
+            Grade {gradeInfo.grade}
+          </span>
+          <span className="text-[10px] uppercase tracking-wider font-semibold mt-1 px-2 text-center" style={{ color }}>
+            {gradeInfo.label}
           </span>
         </div>
       </div>
