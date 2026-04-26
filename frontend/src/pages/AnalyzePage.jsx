@@ -2,10 +2,12 @@ import { useState } from "react";
 import PageWrapper from "../components/Layout/PageWrapper";
 import ColumnSelector from "../components/Upload/ColumnSelector";
 import UploadZone from "../components/Upload/UploadZone";
+import PreprocessingReport from "../components/Upload/PreprocessingReport";
 import useAnalysisStore from "../store/analysisStore";
 
 export default function AnalyzePage() {
   const sessionId = useAnalysisStore((s) => s.sessionId);
+  const preprocessingReport = useAnalysisStore((s) => s.preprocessingReport);
 
   return (
     <PageWrapper>
@@ -18,6 +20,13 @@ export default function AnalyzePage() {
 
       {/* Step 1: Upload */}
       <UploadZone />
+
+      {/* Preprocessing Report */}
+      {sessionId && preprocessingReport && (
+        <div className="mt-6">
+          <PreprocessingReport report={preprocessingReport} />
+        </div>
+      )}
 
       {/* Step 2: Column selector — visible only after a successful upload */}
       {sessionId && (

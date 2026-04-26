@@ -52,14 +52,24 @@ const SCENARIO_COLORS = {
 export default function ColumnSelector() {
   const navigate   = useNavigate();
   const store      = useAnalysisStore();
-  const { columns, dtypes, sessionId, modelId,
+  const { columns, dtypes, sessionId, modelId, preprocessingReport,
           setTarget, setSensitive, setScenario, setMetrics,
           setStep, setLoading } = store;
 
-  const [targetCol,      setTargetCol]      = useState("");
-  const [sensitiveAttrs, setSensitiveAttrs] = useState(() =>
-    columns.filter(isAutoDetected)
-  );
+  const [targetCol, setTargetCol] = useState(() => {
+    if (preprocessingReport?.uci_adult_detected && columns.includes("income_binary")) {
+      return "income_binary";
+    }
+    return "";
+  });
+
+  const [sensitiveAttrs, setSensitiveAttrs] = useState(() => {
+    if (preprocessingReport?.uci_adult_detected) {
+      const uciSensitive = ["sex", "race"].filter(c => columns.includes(c));
+      if (uciSensitive.length > 0) return uciSensitive;
+    }
+    return columns.filter(isAutoDetected);
+  });
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioData,    setScenarioData]    = useState(null);
   const [scenarioOverride, setScenarioOverride] = useState(false);
@@ -121,6 +131,16 @@ export default function ColumnSelector() {
       transition={{ duration: 0.4 }}
       className="glass-card p-6 space-y-6"
     >
+      {/* ── Banner for UCI Adult ────────────────────────────────────────────── */}
+      {preprocessingReport?.uci_adult_detected && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-accent/10 border border-accent/20">
+          <Sparkles className="text-accent flex-shrink-0 mt-0.5" size={18} />
+          <p className="text-sm text-textPrimary leading-relaxed">
+            <span className="font-semibold text-accent">ByUs detected the UCI Adult Income dataset</span> and pre-configured the analysis settings for you. Target variable is set to <code className="text-accent2 px-1 rounded bg-black/20">income_binary</code> and sensitive attributes to <code className="text-accent2 px-1 rounded bg-black/20">sex</code> and <code className="text-accent2 px-1 rounded bg-black/20">race</code>.
+          </p>
+        </div>
+      )}
+
       {/* ── Target variable ─────────────────────────────────────────────────── */}
       <div>
         <p className="section-label">Target Variable</p>

@@ -74,7 +74,7 @@ export default function ReportPage() {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `fairlens-audit-${sessionId.substring(0,8)}.pdf`);
+      link.setAttribute('download', `byus-audit-${sessionId.substring(0,8)}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -88,7 +88,7 @@ export default function ReportPage() {
 
   const handleCopySummary = () => {
     const summary = `
-FairLens Bias Audit Summary
+ByUs Bias Audit Summary
 Dataset: ${filename}
 Target: ${targetCol}
 Score: ${auditScore}/100 (Grade ${grade})
@@ -145,7 +145,7 @@ Recommended Mitigation: ${mitigation?.winner || "N/A"}
           className="glass-card p-6 border border-white/[0.06] flex flex-col"
         >
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-semibold text-textPrimary">Audit Summary</h3>
+            <h3 className="text-lg font-semibold text-textPrimary">ByUs Bias Audit Summary</h3>
             <button 
               onClick={handleCopySummary}
               className="text-textSecondary hover:text-textPrimary transition-colors"

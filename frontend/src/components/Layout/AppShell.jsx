@@ -81,7 +81,7 @@ export default function AppShell() {
             <Scan size={18} className="text-accent" />
           </div>
           <span className="text-lg font-bold text-textPrimary">
-            Fair<span className="text-accent">Lens</span>
+            By<span className="text-accent">Us</span>
           </span>
         </Link>
 

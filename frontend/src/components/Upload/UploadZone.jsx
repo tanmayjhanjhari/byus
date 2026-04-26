@@ -41,7 +41,16 @@ function CsvDropzone() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { "text/csv": [".csv"], "application/csv": [".csv"] },
+    accept: { 
+      'text/csv': ['.csv'],
+      'text/tab-separated-values': ['.tsv'],
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+      'application/vnd.ms-excel': ['.xls'],
+      'application/json': ['.json'],
+      'application/octet-stream': ['.parquet', '.data', '.gz'],
+      'application/zip': ['.zip'],
+      'text/plain': ['.txt', '.data']
+    },
     multiple: false,
     disabled: loading || !!sessionId,
   });
@@ -111,10 +120,34 @@ function CsvDropzone() {
             <CloudUpload size={44} className={isDragActive ? "text-accent" : "text-textSecondary"} />
           </motion.div>
           <div>
-            <p className="text-base font-semibold text-textPrimary">
-              {isDragActive ? "Release to upload" : "Drop your CSV dataset here or click to browse"}
+            <p className="mt-4 text-sm font-medium text-textPrimary">
+              {isDragActive ? "Drop to upload..." : "Drop your dataset here — CSV, Excel, JSON, ZIP and more supported"}
             </p>
-            <p className="text-xs text-textSecondary mt-1">Supports .csv files only</p>
+            <p className="mt-1 text-xs text-textSecondary">
+              or click to browse from your computer
+            </p>
+
+            {/* Formats badges */}
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-accent/20 text-accent border border-accent/30">
+                CSV
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-surface border border-white/10 text-textSecondary">
+                Excel
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-surface border border-white/10 text-textSecondary">
+                JSON
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-surface border border-white/10 text-textSecondary">
+                TSV
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-surface border border-white/10 text-textSecondary">
+                ZIP
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-surface border border-white/10 text-textSecondary">
+                Parquet
+              </span>
+            </div>
           </div>
         </div>
       )}

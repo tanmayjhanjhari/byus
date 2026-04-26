@@ -13,6 +13,7 @@ const useAnalysisStore = create((set, get) => ({
   preview: [],
   rowCount: 0,
   filename: "",
+  preprocessingReport: null,
 
   // ── Configuration ─────────────────────────────────────────────────────────────
   targetCol: "",
@@ -59,6 +60,7 @@ const useAnalysisStore = create((set, get) => ({
       preview:        meta.preview        ?? [],
       rowCount:       meta.row_count      ?? 0,
       filename:       meta.filename       ?? "",
+      preprocessingReport: meta.preprocessing_report ?? null,
     }),
 
   setModel: (modelId) => set({ modelId }),

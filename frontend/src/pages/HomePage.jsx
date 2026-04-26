@@ -108,7 +108,7 @@ export default function HomePage() {
           transition={{ delay: 2.2, duration: 0.6 }}
           className="text-base sm:text-lg text-textSecondary max-w-2xl mx-auto mb-10"
         >
-          Upload any dataset. FairLens surfaces hidden discrimination, explains
+          Upload any dataset. ByUs surfaces hidden discrimination, explains
           why it exists, and helps you fix it.
         </motion.p>
 

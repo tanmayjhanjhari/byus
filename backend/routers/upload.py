@@ -14,16 +14,12 @@ from typing import Any
 import joblib
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, status
+from services.preprocessor import DataPreprocessor
 
 router = APIRouter(tags=["Upload"])
 
 # ── Allowed MIME / extensions ─────────────────────────────────────────────────
-CSV_CONTENT_TYPES = {
-    "text/csv",
-    "application/csv",
-    "application/vnd.ms-excel",
-    "text/plain",
-}
+# We now accept any format handled by DataPreprocessor, but keep model exts
 MODEL_EXTENSIONS = {".pkl", ".joblib"}
 
 
@@ -49,19 +45,19 @@ async def upload_csv(
             detail="Uploaded file is empty.",
         )
 
-    # ── Parse CSV ─────────────────────────────────────────────────────────────
+    # ── Auto-Preprocess ───────────────────────────────────────────────────────
+    preprocessor = DataPreprocessor()
     try:
-        df = pd.read_csv(io.BytesIO(raw))
+        df, report = preprocessor.process(raw, file.filename or "upload.csv")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc)
+        )
     except Exception as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid CSV format",
-        )
-
-    if df.empty:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="CSV parsed but contains no rows.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Preprocessing failed: {str(exc)}"
         )
 
     # ── Build metadata ────────────────────────────────────────────────────────
@@ -99,6 +95,7 @@ async def upload_csv(
         "numeric_cols": numeric_cols,
         "categorical_cols": categorical_cols,
         "preview": preview,
+        "preprocessing_report": report,
     }
 
 
