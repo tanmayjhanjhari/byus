@@ -1,5 +1,5 @@
 """
-FairLens — Explain Router
+ByUs — Explain Router
 
 POST /api/explain
   Runs BiasExplainer for a single sensitive attribute and stores the

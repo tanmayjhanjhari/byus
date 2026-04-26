@@ -1,5 +1,5 @@
 """
-FairLens Backend — FastAPI Application Entry Point
+ByUs Backend — FastAPI Application Entry Point
 """
 
 import os
@@ -44,7 +44,7 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="FairLens API",
+        title="ByUs API",
         description=(
             "Detect, explain, and mitigate bias in datasets and ML models "
             "using Google Gemini 2.0 Flash."

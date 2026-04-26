@@ -1,5 +1,5 @@
 """
-FairLens — Gemini Chat Router
+ByUs — Gemini Chat Router
 
 POST /api/detect-scenario  — classify dataset domain via Gemini
 POST /api/gemini-explain   — generate manager-friendly bias explanation

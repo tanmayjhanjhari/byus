@@ -24,8 +24,16 @@ class DataPreprocessor:
         }
 
         # Step 1: Format Detection & Loading
-        df, original_format = self._load_data(raw_bytes, filename)
+        df, original_format, extra_meta, load_warnings = self._load_data(raw_bytes, filename)
         report["original_format"] = original_format
+        report.update(extra_meta)
+        report["warnings"].extend(load_warnings)
+        
+        # New Step: Empty Columns
+        df, empty_cols = self._drop_empty_columns(df)
+        if empty_cols:
+            report["empty_cols_dropped"] = empty_cols
+
         report["original_rows"] = len(df)
         report["original_cols"] = len(df.columns)
 
@@ -58,13 +66,27 @@ class DataPreprocessor:
         df, uci_detected = self._uci_adult_fix(df, filename)
         report["uci_adult_detected"] = uci_detected
 
+        # New Step: ID Columns
+        id_cols = self._detect_id_columns(df)
+        if id_cols:
+            report["id_columns_detected"] = id_cols
+            for col in id_cols:
+                report["warnings"].append(f"Column '{col}' looks like a row ID. Consider excluding it from analysis.")
+
+        # New Step: Zero Variance Columns
+        df, zero_var_cols = self._drop_zero_variance_columns(df)
+        if zero_var_cols:
+            report["zero_variance_cols_dropped"] = zero_var_cols
+
         report["final_rows"] = len(df)
         report["final_cols"] = len(df.columns)
 
         return df, report
 
-    def _load_data(self, raw_bytes: bytes, filename: str) -> tuple[pd.DataFrame, str]:
+    def _load_data(self, raw_bytes: bytes, filename: str) -> tuple[pd.DataFrame, str, dict, list]:
         ext = filename.lower().split('.')[-1]
+        extra = {}
+        warnings = []
         
         # Handle compressed files first
         if ext == 'zip':
@@ -73,11 +95,28 @@ class DataPreprocessor:
                     file_list = z.namelist()
                     if not file_list:
                         raise ValueError("ZIP archive is empty.")
-                    # Pick the first file that looks like tabular data, else just first file
-                    target_file = next((f for f in file_list if any(f.endswith(e) for e in ['.csv', '.tsv', '.data', '.txt'])), file_list[0])
-                    raw_bytes = z.read(target_file)
-                    filename = target_file
+                    
+                    files_info = [info for info in z.infolist() if not info.is_dir()]
+                    if not files_info:
+                        raise ValueError("ZIP archive contains no files.")
+                    
+                    files_info.sort(key=lambda x: x.file_size, reverse=True)
+                    
+                    target_info = None
+                    for info in files_info:
+                        lower_name = info.filename.lower()
+                        if any(lower_name.endswith(e) for e in ['.csv', '.tsv', '.data', '.txt']):
+                            if "readme" not in lower_name and "description" not in lower_name:
+                                target_info = info
+                                break
+                    
+                    if target_info is None:
+                        target_info = files_info[0]
+                        
+                    raw_bytes = z.read(target_info.filename)
+                    filename = target_info.filename
                     ext = filename.lower().split('.')[-1]
+                    warnings.append(f"Extracted '{filename}' from ZIP archive.")
             except Exception as e:
                 raise ValueError(f"Could not extract ZIP file: {str(e)}")
                 
@@ -101,7 +140,13 @@ class DataPreprocessor:
                 df = pd.read_csv(io.BytesIO(raw_bytes), sep='\t')
             elif ext in ['xlsx', 'xls']:
                 engine = 'openpyxl' if ext == 'xlsx' else 'xlrd'
-                df = pd.read_excel(io.BytesIO(raw_bytes), engine=engine)
+                xls = pd.ExcelFile(io.BytesIO(raw_bytes), engine=engine)
+                sheet_names = xls.sheet_names
+                sheet = sheet_names[0]
+                df = pd.read_excel(xls, sheet_name=sheet)
+                extra["excel_sheet_used"] = sheet
+                if len(sheet_names) > 1:
+                    warnings.append(f"Excel file has {len(sheet_names)} sheets. Using '{sheet}'. Upload a specific sheet if needed.")
             elif ext == 'json':
                 try:
                     df = pd.read_json(io.BytesIO(raw_bytes), orient='records')
@@ -128,7 +173,7 @@ class DataPreprocessor:
         if df is None or df.empty:
             raise ValueError("The parsed file contains no data.")
             
-        return df, fmt
+        return df, fmt, extra, warnings
 
     def _handle_headers(self, df: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
         # Check if all column names are integers or match Unnamed pattern
@@ -235,3 +280,30 @@ class DataPreprocessor:
             df['income_binary'] = np.where(income_col == '>50K', 1, np.where(income_col == '<=50K', 0, np.nan))
             
         return df, True
+
+    def _drop_empty_columns(self, df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
+        empty_cols = []
+        for col in df.columns:
+            if df[col].isna().mean() > 0.95:
+                empty_cols.append(col)
+        if empty_cols:
+            df.drop(columns=empty_cols, inplace=True)
+        return df, empty_cols
+
+    def _detect_id_columns(self, df: pd.DataFrame) -> list:
+        id_cols = []
+        for col in df.columns:
+            lower_col = str(col).lower()
+            if "id" in lower_col or "index" in lower_col:
+                if df[col].nunique(dropna=False) == len(df):
+                    id_cols.append(col)
+        return id_cols
+
+    def _drop_zero_variance_columns(self, df: pd.DataFrame) -> tuple[pd.DataFrame, list]:
+        zero_var_cols = []
+        for col in df.columns:
+            if df[col].nunique(dropna=True) <= 1:
+                zero_var_cols.append(col)
+        if zero_var_cols:
+            df.drop(columns=zero_var_cols, inplace=True)
+        return df, zero_var_cols

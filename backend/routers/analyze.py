@@ -1,5 +1,5 @@
 """
-FairLens — Analyze Router
+ByUs — Analyze Router
 
 POST /api/analyze
   1. Validate the dataset with DataValidator
@@ -45,7 +45,7 @@ async def analyze(
     request: Request,
 ) -> dict[str, Any]:
     """
-    Run the full FairLens bias analysis pipeline.
+    Run the full ByUs bias analysis pipeline.
 
     Steps:
     1. Retrieve the dataset from the session store.

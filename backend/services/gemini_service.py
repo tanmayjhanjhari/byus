@@ -1,5 +1,5 @@
 """
-FairLens — Gemini AI Service
+ByUs — Gemini AI Service
 
 Wraps Google Gemini 2.0 Flash for:
   - Dataset scenario detection
@@ -84,7 +84,7 @@ class GeminiService:
         )
 
         prompt = (
-            f"You are FairLens AI, a bias auditing assistant. "
+            f"You are ByUs AI, a bias auditing assistant. "
             f"Given this bias analysis: {context}. "
             "Write exactly 3 short paragraphs for a non-technical manager: "
             "1) What this bias means in plain words and concrete numbers. "
@@ -124,7 +124,7 @@ class GeminiService:
         str — Gemini's reply.
         """
         system_preamble = (
-            "You are FairLens Bias Copilot, an expert AI assistant specialising in "
+            "You are ByUs Bias Copilot, an expert AI assistant specialising in "
             "algorithmic fairness, bias detection, and ML ethics. "
             "Be concise, helpful, and explain fairness concepts in simple language. "
             f"Current analysis context: {json.dumps(session_context, default=str)}"

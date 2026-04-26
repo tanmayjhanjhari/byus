@@ -1,5 +1,5 @@
 """
-FairLens — Bias Analysis Engine
+ByUs — Bias Analysis Engine
 
 Computes SPD, DI, EOD, AOD per sensitive attribute with bootstrapped
 confidence intervals, severity labels, and a composite Audit Score.

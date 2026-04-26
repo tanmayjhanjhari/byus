@@ -1,5 +1,5 @@
 """
-FairLens — Mitigate Router
+ByUs — Mitigate Router
 
 POST /api/mitigate
   Runs BiasMitigator (reweighing + threshold adjustment).
