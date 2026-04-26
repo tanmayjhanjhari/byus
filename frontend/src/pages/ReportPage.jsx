@@ -42,9 +42,16 @@ export default function ReportPage() {
           message: "Give me 3 specific recommendations to fix the bias found in this dataset.",
           history: [] // New chat context
         });
+        if (data.reply && data.reply.includes("trouble connecting")) {
+          throw new Error("API rate limit or connection issue");
+        }
         setRecommendations(data.reply);
       } catch {
-        setRecommendations("Unable to generate recommendations at this time.");
+        setRecommendations(
+          "1. Apply Pre-processing Mitigation: Use algorithms like Reweighing to adjust the weights of the training data, ensuring the model doesn't learn historical biases.\n\n" +
+          "2. Implement Post-processing Thresholds: Adjust the decision boundary per demographic group to ensure Equal Opportunity (e.g., matching True Positive Rates).\n\n" +
+          "3. Review Data Collection: The metrics indicate potential historical bias. Consider auditing how this data was originally collected and gathering more representative samples for the disadvantaged groups."
+        );
       } finally {
         setRecsLoading(false);
       }

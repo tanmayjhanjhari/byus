@@ -71,8 +71,9 @@ class BiasEngine:
                 continue
 
             # Drop rows where the attribute or label is null
-            sub = df[[attr, target_col, label_col]].dropna(
-                subset=[attr, label_col]
+            cols_to_keep = list(dict.fromkeys([attr, target_col, label_col]))
+            sub = df[cols_to_keep].dropna(
+                subset=list(dict.fromkeys([attr, label_col]))
             )
             if sub.empty:
                 metrics_per_attr[attr] = {

@@ -195,7 +195,8 @@ class ReportGenerator:
             f'&nbsp;&nbsp;<font size="11" color="#64748B">Overall Severity: '
             f'<b>{bias_results.get("overall_severity", "N/A").upper()}</b></font>'
         )
-        story.append(Paragraph(score_html, body))
+        score_style = ParagraphStyle("fl_score", leading=48)
+        story.append(Paragraph(score_html, score_style))
         story.append(Spacer(1, 0.4 * cm))
 
         # ── Validation warnings ───────────────────────────────────────────────

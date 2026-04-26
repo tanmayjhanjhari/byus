@@ -18,8 +18,9 @@ from fairlearn.metrics import (
     MetricFrame,
     demographic_parity_difference,
     equalized_odds_difference,
+    selection_rate,
 )
-from sklearn.metrics import accuracy_score, selection_rate
+from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import LabelEncoder
 
 

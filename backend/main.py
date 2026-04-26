@@ -25,7 +25,6 @@ async def lifespan(app: FastAPI):
     # Nothing to clean up on shutdown for in-memory store
 
 
-@app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
@@ -33,7 +32,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     content = {"error": True, "detail": str(exc.detail), "code": exc.status_code}
     if exc.status_code == 503:
@@ -55,14 +53,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── CORS ────────────────────────────────────────────────────────────────
-    raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
-    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    # ── Exception Handlers ──────────────────────────────────────────────────
+    app.add_exception_handler(Exception, global_exception_handler)
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_credentials=True,
+        allow_origins=["*"],
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

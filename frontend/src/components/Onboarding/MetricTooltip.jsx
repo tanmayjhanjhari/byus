@@ -17,6 +17,19 @@ export default function MetricTooltip({ term, children }) {
 
   if (!definition) return <>{children}</>;
 
+  const isLeftAligned = term === "SPD" || term === "AuditScore";
+  const alignClass = isLeftAligned 
+    ? "left-[-10px]" 
+    : term === "AOD"
+      ? "right-[-10px]"
+      : "left-1/2 -translate-x-1/2";
+
+  const caretClass = isLeftAligned
+    ? "left-6"
+    : term === "AOD"
+      ? "right-8"
+      : "left-1/2 -translate-x-1/2";
+
   return (
     <span className="relative inline-flex items-center gap-1 group">
       {children}
@@ -43,7 +56,7 @@ export default function MetricTooltip({ term, children }) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 4, scale: 0.96 }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2.5 z-50 w-72 pointer-events-none"
+            className={`absolute bottom-full mb-2.5 z-50 w-64 sm:w-72 pointer-events-none ${alignClass}`}
           >
             <div
               className="rounded-xl px-4 py-3 text-left shadow-2xl"
@@ -57,7 +70,7 @@ export default function MetricTooltip({ term, children }) {
               <p className="text-xs text-textSecondary leading-relaxed">{definition}</p>
             </div>
             {/* Caret */}
-            <div className="absolute left-1/2 -translate-x-1/2 top-full -mt-px">
+            <div className={`absolute top-full -mt-px ${caretClass}`}>
               <div
                 className="w-3 h-1.5"
                 style={{
