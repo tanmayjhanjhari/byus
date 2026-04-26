@@ -86,18 +86,9 @@ class BiasEngine:
             )
 
         # ── Audit Score ───────────────────────────────────────────────────────
-        spd_values = [
-            abs(m["spd"])
-            for m in metrics_per_attr.values()
-            if isinstance(m, dict) and "spd" in m
-        ]
-        if spd_values:
-            audit_score = max(0.0, 100.0 - (np.mean(spd_values) * 100))
-        else:
-            audit_score = 100.0
+        audit_score_rounded = self._compute_audit_score(metrics_per_attr)
 
         # Grade
-        audit_score_rounded = round(audit_score, 2)
         grade = self._grade(audit_score_rounded)
 
         # Overall severity
@@ -317,10 +308,43 @@ class BiasEngine:
 
     @staticmethod
     def _grade(score: float) -> str:
-        if score >= 80:
-            return "A"
-        if score >= 60:
-            return "B"
-        if score >= 40:
-            return "C"
-        return "F"
+        if score >= 90:
+            return "A (Fair)"
+        elif score >= 75:
+            return "B (Minor issues)"
+        elif score >= 55:
+            return "C (Moderate bias)"
+        else:
+            return "F (High bias — action required)"
+
+    def _compute_audit_score(self, metrics_per_attr: dict) -> float:
+        penalties = []
+        for attr, m in metrics_per_attr.items():
+            if "error" in m:
+                continue
+            spd = abs(m.get("spd", m.get("SPD", 0)))
+            di = m.get("di", m.get("DI", 1.0))
+            if di is None or np.isnan(di):
+                di = 1.0
+
+            # SPD penalty: scaled aggressively
+            spd_penalty = spd * 250
+
+            # DI penalty: heavy if below legal 0.8 threshold
+            if di < 0.8:
+                di_penalty = (0.8 - di) * 150
+            else:
+                di_penalty = 0
+
+            # EOD penalty if available
+            eod = m.get("eod", m.get("EOD"))
+            eod_penalty = abs(eod) * 100 if eod is not None and not np.isnan(eod) else 0
+
+            penalties.append(spd_penalty + di_penalty + eod_penalty)
+
+        if not penalties:
+            return 100.0
+            
+        total_penalty = sum(penalties) / max(len(penalties), 1)
+        score = max(0.0, min(100.0, 100.0 - total_penalty))
+        return float(round(score, 1))

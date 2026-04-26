@@ -122,80 +122,136 @@ class BiasMitigator:
 
     # ── Threshold Adjustment ──────────────────────────────────────────────────
 
-    def threshold_adjust(
-        self,
-        df: pd.DataFrame,
-        target_col: str,
-        sensitive_attr: str,
-    ) -> dict[str, Any]:
-        """
-        Train a base classifier, then find per-group decision thresholds that
-        maximise TPR equality (equal opportunity) across groups using scipy.
-        """
-        work = df.copy().dropna(subset=[target_col, sensitive_attr])
+    def threshold_adjust(self, df, target_col, sensitive_attr):
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+        import numpy as np
 
-        X, y, sensitive = self._prepare_features(work, target_col, sensitive_attr)
+        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
 
+        # Encode sensitive attr and target
+        from sklearn.preprocessing import LabelEncoder
+        le_target = LabelEncoder()
+        le_sens = LabelEncoder()
+        y = le_target.fit_transform(df_clean[target_col].astype(str))
+        s = le_sens.fit_transform(df_clean[sensitive_attr].astype(str))
+
+        # Feature columns: numeric only, exclude target and sensitive
+        feature_cols = [c for c in df_clean.columns
+                        if c != target_col and c != sensitive_attr
+                        and df_clean[c].dtype in ['int64', 'float64']]
+        if not feature_cols:
+            raise ValueError("No numeric feature columns found for threshold adjustment.")
+
+        X = df_clean[feature_cols].fillna(0).values
+
+        # Fixed seed for reproducibility
         X_train, X_test, y_train, y_test, s_train, s_test = train_test_split(
-            X, y, sensitive,
-            test_size=self.TEST_SIZE,
-            random_state=self.RANDOM_STATE,
-            stratify=y,
+            X, y, s, test_size=0.3, random_state=42, stratify=y
         )
 
-        # Train base model
-        clf = LogisticRegression(max_iter=1000, solver="lbfgs", random_state=self.RANDOM_STATE)
-        clf.fit(X_train, y_train)
-
-        # Before metrics (default threshold 0.5)
-        y_pred_before = clf.predict(X_test)
-        before = self._metrics_from_arrays(y_test, y_pred_before, s_test, work[sensitive_attr])
+        model = LogisticRegression(max_iter=1000, random_state=42)
+        model.fit(X_train, y_train)
 
         # Get probabilities on test set
-        proba = clf.predict_proba(X_test)[:, 1]
+        proba = model.predict_proba(X_test)[:, 1]
 
-        # ── Per-group optimal threshold via scipy ─────────────────────────────
+        # Compute BEFORE metrics (standard 0.5 threshold)
+        y_pred_before = (proba >= 0.5).astype(int)
+        before_metrics = {
+            "SPD": self._compute_spd(y_pred_before, s_test),
+            "DI": self._compute_di(y_pred_before, s_test),
+            "EOD": self._compute_eod(y_pred_before, y_test, s_test),
+            "AOD": self._compute_aod(y_pred_before, y_test, s_test),
+            "accuracy": round(accuracy_score(y_test, y_pred_before), 4),
+            "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
+            "recall": round(recall_score(y_test, y_pred_before, zero_division=0), 4),
+            "f1": round(f1_score(y_test, y_pred_before, zero_division=0), 4),
+        }
+
+        # Find per-group thresholds that equalize TPR
+        # Strategy: grid search thresholds per group, minimize TPR difference
         groups = np.unique(s_test)
-        thresholds: dict[str, float] = {}
+        best_thresholds = {}
+        best_spd = float('inf')
 
-        # Target TPR: average TPR across groups at default threshold
-        def _tpr(y_true, y_pred):
-            tp = ((y_pred == 1) & (y_true == 1)).sum()
-            fn = ((y_pred == 0) & (y_true == 1)).sum()
-            return tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        # Try threshold pairs from 0.2 to 0.8 in steps of 0.05
+        threshold_range = np.arange(0.2, 0.81, 0.05)
 
-        target_tpr = float(np.mean([
-            _tpr(y_test[s_test == g], y_pred_before[s_test == g])
-            for g in groups
-        ]))
+        if len(groups) == 2:
+            g0, g1 = groups[0], groups[1]
+            for t0 in threshold_range:
+                for t1 in threshold_range:
+                    y_adj = np.zeros(len(proba), dtype=int)
+                    y_adj[s_test == g0] = (proba[s_test == g0] >= t0).astype(int)
+                    y_adj[s_test == g1] = (proba[s_test == g1] >= t1).astype(int)
 
-        for group in groups:
-            mask = s_test == group
-            y_g = y_test[mask]
-            p_g = proba[mask]
+                    # Skip if recall collapses to 0 for any group
+                    rec0 = recall_score(y_test[s_test == g0], y_adj[s_test == g0], zero_division=0)
+                    rec1 = recall_score(y_test[s_test == g1], y_adj[s_test == g1], zero_division=0)
+                    if rec0 < 0.05 or rec1 < 0.05:
+                        continue
 
-            def objective(threshold: float) -> float:
-                pred = (p_g >= threshold).astype(int)
-                tpr = _tpr(y_g, pred)
-                return abs(tpr - target_tpr)
+                    spd = abs(self._compute_spd(y_adj, s_test))
+                    if spd < best_spd:
+                        best_spd = spd
+                        best_thresholds = {g0: t0, g1: t1}
+        else:
+            # For multi-group: use uniform threshold that minimizes overall SPD
+            # while keeping recall > 0.05 per group
+            for t in threshold_range:
+                y_adj = (proba >= t).astype(int)
+                recalls = [recall_score(y_test[s_test == g], y_adj[s_test == g], zero_division=0)
+                           for g in groups]
+                if min(recalls) < 0.05:
+                    continue
+                spd = abs(self._compute_spd(y_adj, s_test))
+                if spd < best_spd:
+                    best_spd = spd
+                    best_thresholds = {g: t for g in groups}
 
-            result = minimize_scalar(objective, bounds=(0.01, 0.99), method="bounded")
-            thresholds[str(group)] = round(float(result.x), 4)
+        # If no valid thresholds found, fall back to 0.5 for all groups
+        if not best_thresholds:
+            best_thresholds = {g: 0.5 for g in groups}
 
-        # Apply per-group thresholds
-        y_pred_after = np.zeros(len(y_test), dtype=int)
-        for group, threshold in thresholds.items():
-            mask = s_test == group
-            y_pred_after[mask] = (proba[mask] >= threshold).astype(int)
+        # Apply best thresholds
+        y_pred_after = np.zeros(len(proba), dtype=int)
+        for g, thresh in best_thresholds.items():
+            y_pred_after[s_test == g] = (proba[s_test == g] >= thresh).astype(int)
 
-        after = self._metrics_from_arrays(y_test, y_pred_after, s_test, work[sensitive_attr])
-        eff = self.effects(before, after)
+        after_metrics = {
+            "SPD": self._compute_spd(y_pred_after, s_test),
+            "DI": self._compute_di(y_pred_after, s_test),
+            "EOD": self._compute_eod(y_pred_after, y_test, s_test),
+            "AOD": self._compute_aod(y_pred_after, y_test, s_test),
+            "accuracy": round(accuracy_score(y_test, y_pred_after), 4),
+            "precision": round(precision_score(y_test, y_pred_after, zero_division=0), 4),
+            "recall": round(recall_score(y_test, y_pred_after, zero_division=0), 4),
+            "f1": round(f1_score(y_test, y_pred_after, zero_division=0), 4),
+        }
+
+        spd_before = abs(before_metrics["SPD"])
+        spd_after = abs(after_metrics["SPD"])
+        improvement_pct = round(((spd_before - spd_after) / max(spd_before, 1e-9)) * 100, 1)
+        accuracy_retained = round((after_metrics["accuracy"] / max(before_metrics["accuracy"], 1e-9)) * 100, 1)
+
+        effects = {
+            "accuracy_delta": round(after_metrics["accuracy"] - before_metrics["accuracy"], 4),
+            "precision_delta": round(after_metrics["precision"] - before_metrics["precision"], 4),
+            "recall_delta": round(after_metrics["recall"] - before_metrics["recall"], 4),
+            "f1_delta": round(after_metrics["f1"] - before_metrics["f1"], 4),
+            "spd_delta": round(after_metrics["SPD"] - before_metrics["SPD"], 4),
+            "bias_reduction_pct": improvement_pct,
+            "accuracy_retained_pct": accuracy_retained,
+        }
 
         return {
-            "before": before,
-            "after": after,
-            "effects": eff,
-            "thresholds": thresholds,
+            "before": before_metrics,
+            "after": after_metrics,
+            "effects": effects,
+            "improvement_pct": improvement_pct,
+            "thresholds": {str(k): round(float(v), 2) for k, v in best_thresholds.items()},
         }
 
     # ── Effects ───────────────────────────────────────────────────────────────
@@ -386,3 +442,56 @@ class BiasMitigator:
             # Similar bias reduction → prefer higher accuracy
             return "reweigh" if rew_acc >= thr_acc else "threshold"
         return "reweigh" if rew_bias >= thr_bias else "threshold"
+
+    def _compute_spd(self, y_pred, s):
+        groups = np.unique(s)
+        if len(groups) < 2:
+            return 0.0
+        rates = {g: np.mean(y_pred[s == g]) for g in groups}
+        priv = max(rates, key=rates.get)
+        unpriv = min(rates, key=rates.get)
+        return round(float(rates[priv] - rates[unpriv]), 4)
+
+    def _compute_di(self, y_pred, s):
+        groups = np.unique(s)
+        if len(groups) < 2:
+            return 1.0
+        rates = {g: np.mean(y_pred[s == g]) for g in groups}
+        priv_rate = max(rates.values())
+        unpriv_rate = min(rates.values())
+        if priv_rate == 0:
+            return 1.0
+        return round(float(unpriv_rate / priv_rate), 4)
+
+    def _compute_eod(self, y_pred, y_true, s):
+        from sklearn.metrics import recall_score
+        groups = np.unique(s)
+        if len(groups) < 2:
+            return 0.0
+        tprs = {}
+        for g in groups:
+            mask = s == g
+            if sum(y_true[mask]) == 0:
+                return None
+            tprs[g] = recall_score(y_true[mask], y_pred[mask], zero_division=0)
+        priv = max(tprs, key=tprs.get)
+        unpriv = min(tprs, key=tprs.get)
+        return round(float(tprs[priv] - tprs[unpriv]), 4)
+
+    def _compute_aod(self, y_pred, y_true, s):
+        groups = np.unique(s)
+        if len(groups) < 2:
+            return 0.0
+        tprs, fprs = {}, {}
+        for g in groups:
+            mask = s == g
+            pos_mask = y_true[mask] == 1
+            neg_mask = y_true[mask] == 0
+            if sum(pos_mask) == 0 or sum(neg_mask) == 0:
+                return None
+            tprs[g] = np.mean(y_pred[mask][pos_mask])
+            fprs[g] = np.mean(y_pred[mask][neg_mask])
+        groups_list = list(groups)
+        tpr_diff = abs(tprs[groups_list[0]] - tprs[groups_list[1]])
+        fpr_diff = abs(fprs[groups_list[0]] - fprs[groups_list[1]])
+        return round(float((tpr_diff + fpr_diff) / 2), 4)
