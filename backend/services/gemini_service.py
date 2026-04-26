@@ -104,8 +104,12 @@ Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
     # ── Action Plan ───────────────────────────────────────────────────────────
 
     def get_action_plan(self, session_data: dict) -> str:
-        scenario = session_data.get("scenario", "unknown")
-        metrics_summary = session_data.get("metrics_per_attr", {})
+        scenario_dict = session_data.get("scenario", {})
+        scenario = scenario_dict.get("scenario", "unknown") if isinstance(scenario_dict, dict) else str(scenario_dict)
+        
+        bias_results = session_data.get("bias_results", {})
+        metrics_summary = bias_results.get("metrics_per_attr", {})
+        
         mitigation = session_data.get("mitigation", {})
         winner = mitigation.get("winner", "reweigh")
         
@@ -145,15 +149,29 @@ Make each step actionable and specific to the findings above."""
         except Exception:
             # Fallback: generate rule-based specific plan
             lines = []
+            
+            attr_points = []
             for attr, m in metrics_summary.items():
                 if "error" in m: continue
                 proxy_list = m.get("proxy_features", [])
-                top_proxy = proxy_list[0].get("feature", "a correlated feature") if proxy_list else "a correlated feature"
-                spd = m.get("spd", m.get("SPD", 0))
-                lines.append(f"1. For '{attr}': Remove or neutralize '{top_proxy}' from your model features — it has {spd:.0%} outcome gap and acts as a hidden discriminator.")
-            lines.append(f"2. Apply {winner} mitigation technique before retraining your model to rebalance group representation.")
-            lines.append("3. Re-audit after retraining to confirm bias reduction before deployment.")
-            return "\n".join(lines)
+                top_proxy = proxy_list[0].get("feature") if proxy_list else None
+                
+                # Check for either lowercase or uppercase SPD
+                spd = m.get("spd") if "spd" in m else m.get("SPD", 0)
+                
+                if top_proxy:
+                    attr_points.append(f"For '{attr}': Remove or neutralize '{top_proxy}' from your model features — it acts as a hidden discriminator (SPD gap: {abs(spd):.1%}).")
+                else:
+                    attr_points.append(f"For '{attr}': Review data collection practices to understand the {abs(spd):.1%} outcome gap.")
+            
+            if attr_points:
+                lines.append("1. Feature Engineering: " + " ".join(attr_points))
+            else:
+                lines.append("1. Feature Engineering: Review your dataset for correlated proxy features that may indirectly leak sensitive demographic information.")
+                
+            lines.append(f"2. Apply Mitigation: Implement the {winner} mitigation technique before retraining your model to rebalance group representation and improve fairness.")
+            lines.append("3. Continuous Monitoring: Re-audit the model after retraining to confirm bias reduction before final deployment, and set up ongoing fairness checks.")
+            return "\n\n".join(lines)
 
     # ── Copilot chat ──────────────────────────────────────────────────────────
 
