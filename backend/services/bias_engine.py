@@ -123,7 +123,8 @@ class BiasEngine:
         """Compute all metrics for a single sensitive attribute."""
         feature_cols = [c for c in sub.columns if c not in [target_col, attr, label_col]]
         # Step 1 — always work on a clean copy
-        df_work = sub[[target_col, attr, label_col] + feature_cols].copy()
+        cols_to_select = list(dict.fromkeys([target_col, attr, label_col] + feature_cols))
+        df_work = sub[cols_to_select].copy()
         df_work = df_work.dropna(subset=[target_col, attr])
 
         # Step 2 — binarize target robustly
