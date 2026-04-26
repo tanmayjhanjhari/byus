@@ -76,28 +76,84 @@ class GeminiService:
         di = metrics.get("di", metrics.get("DI", 1)) or 1
         severity = metrics.get("severity", "unknown")
 
-        context = (
-            f"Scenario: {scenario}. "
-            f"Sensitive attribute: {sensitive_attr}. "
-            f"SPD={spd:.3f}, DI={di:.3f}, severity={severity}. "
-            f"Root cause analysis: {plain_reason}"
-        )
+        prompt = f"""You are ByUs AI Copilot explaining bias findings to a non-technical business manager.
 
-        prompt = (
-            f"You are ByUs AI, a bias auditing assistant. "
-            f"Given this bias analysis: {context}. "
-            "Write exactly 3 short paragraphs for a non-technical manager: "
-            "1) What this bias means in plain words and concrete numbers. "
-            "2) Why it likely exists — historical patterns, data collection, proxy variables. "
-            "3) What real harm it causes to real people — be specific, human, and empathetic. "
-            "Avoid all jargon. Do not use bullet points. Keep each paragraph under 4 sentences."
-        )
+Context:
+- Dataset scenario: {scenario}
+- Sensitive attribute: '{sensitive_attr}'
+- SPD = {metrics.get('SPD', 'N/A')} (outcome gap between groups)
+- DI = {metrics.get('DI', 'N/A')} (ratio of positive outcomes, legal threshold is 0.8)
+- Severity: {metrics.get('severity', 'unknown')}
+- Top proxy feature: {plain_reason}
+
+Write 3 SHORT paragraphs. Each paragraph max 2 sentences. Use plain English.
+Paragraph 1: What this bias MEANS in the real world for this specific scenario (hiring/lending/healthcare etc). Be specific, not generic.
+Paragraph 2: WHY it likely exists — explain the historical or societal reason, not just the math.
+Paragraph 3: What HARM it causes to real people if not fixed. Give a concrete example.
+
+Do NOT repeat the proxy feature statistics already shown above.
+Do NOT use technical jargon like SPD, DI, EOD, AOD, logistic regression.
+Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
 
         try:
             response = _model.generate_content(prompt)
             return response.text.strip()
         except Exception:
-            return plain_reason
+            return "An error occurred while communicating with the AI. Please try again."
+
+    # ── Action Plan ───────────────────────────────────────────────────────────
+
+    def get_action_plan(self, session_data: dict) -> str:
+        scenario = session_data.get("scenario", "unknown")
+        metrics_summary = session_data.get("metrics_per_attr", {})
+        mitigation = session_data.get("mitigation", {})
+        winner = mitigation.get("winner", "reweigh")
+        
+        # Build specific context
+        attr_summaries = []
+        for attr, m in metrics_summary.items():
+            if "error" in m: continue
+            spd = m.get("spd", m.get("SPD", "N/A"))
+            di = m.get("di", m.get("DI", "N/A"))
+            severity = m.get("severity", "unknown")
+            proxy = m.get("proxy_features", [{}])
+            top_proxy = proxy[0].get("feature", "unknown") if proxy else "unknown"
+            attr_summaries.append(f"- {attr}: SPD={spd}, DI={di}, severity={severity}, top proxy='{top_proxy}'")
+        
+        attrs_text = "\n".join(attr_summaries)
+        
+        prompt = f"""You are ByUs AI. Generate a specific 3-step action plan for this exact dataset.
+
+Dataset scenario: {scenario}
+Bias findings:
+{attrs_text}
+Recommended mitigation technique: {winner}
+
+Write exactly 3 numbered action steps. Each step must:
+- Be specific to THIS dataset and scenario (not generic advice)
+- Mention the actual attribute name and proxy feature found
+- Tell the organization exactly what to do and why
+- Be 2-3 sentences maximum
+- Use plain English, no jargon
+
+Do NOT give generic advice like 'collect more data' or 'apply reweighing'.
+Make each step actionable and specific to the findings above."""
+
+        try:
+            response = _model.generate_content(prompt)
+            return response.text.strip()
+        except Exception:
+            # Fallback: generate rule-based specific plan
+            lines = []
+            for attr, m in metrics_summary.items():
+                if "error" in m: continue
+                proxy_list = m.get("proxy_features", [])
+                top_proxy = proxy_list[0].get("feature", "a correlated feature") if proxy_list else "a correlated feature"
+                spd = m.get("spd", m.get("SPD", 0))
+                lines.append(f"1. For '{attr}': Remove or neutralize '{top_proxy}' from your model features — it has {spd:.0%} outcome gap and acts as a hidden discriminator.")
+            lines.append(f"2. Apply {winner} mitigation technique before retraining your model to rebalance group representation.")
+            lines.append("3. Re-audit after retraining to confirm bias reduction before deployment.")
+            return "\n".join(lines)
 
     # ── Copilot chat ──────────────────────────────────────────────────────────
 

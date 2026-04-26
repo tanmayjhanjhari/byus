@@ -19,15 +19,17 @@ function DeltaRow({ label, before, after }) {
   }
 
   return (
-    <div className="flex items-center justify-between py-2 border-b border-white/[0.04] last:border-0">
-      <span className="text-sm font-medium text-textSecondary w-16">{label}</span>
-      <span className="text-sm text-textPrimary w-16 text-right">{b.toFixed(3)}</span>
-      <span className="text-sm text-textPrimary w-16 text-right">{a.toFixed(3)}</span>
-      <span className={`text-sm font-medium w-20 flex items-center justify-end gap-1 ${isImprovement ? "text-success" : "text-danger"}`}>
-        {isImprovement ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
-        {absDelta.toFixed(3)}
-      </span>
-    </div>
+    <tr className="border-b border-white/[0.04] last:border-0">
+      <td className="truncate px-2 py-1.5 min-w-0 font-medium text-textSecondary">{label}</td>
+      <td className="truncate px-2 py-1.5 min-w-0 text-textPrimary text-right">{b.toFixed(3)}</td>
+      <td className="truncate px-2 py-1.5 min-w-0 text-textPrimary text-right">{a.toFixed(3)}</td>
+      <td className={`truncate px-2 py-1.5 min-w-0 font-medium text-right ${isImprovement ? "text-success" : "text-danger"}`}>
+        <div className="flex items-center justify-end gap-1">
+          {isImprovement ? <ArrowDown size={14} className="flex-shrink-0" /> : <ArrowUp size={14} className="flex-shrink-0" />}
+          <span className="truncate">{absDelta.toFixed(3)}</span>
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -90,21 +92,27 @@ export default function TechniqueCard({ name, data, isWinner }) {
         <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-2 border-b border-white/[0.06] pb-2">
           Fairness Impact
         </h4>
-        <div className="flex text-xs text-textSecondary mb-1 font-medium">
-          <span className="w-16">Metric</span>
-          <span className="w-16 text-right">Before</span>
-          <span className="w-16 text-right">After</span>
-          <span className="w-20 text-right">Change</span>
-        </div>
         <div className="bg-surface/30 rounded-lg p-2">
-          {["SPD", "DI", "EOD", "AOD"].map(m => (
-            <DeltaRow 
-              key={m} 
-              label={m} 
-              before={getVal(before, m)} 
-              after={getVal(after, m)} 
-            />
-          ))}
+          <table className="w-full table-fixed text-xs">
+            <thead>
+              <tr className="text-textSecondary font-medium border-b border-white/[0.06]">
+                <th className="truncate px-2 py-1.5 min-w-0 text-left" style={{ width: '25%' }}>Metric</th>
+                <th className="truncate px-2 py-1.5 min-w-0 text-right" style={{ width: '22%' }}>Before</th>
+                <th className="truncate px-2 py-1.5 min-w-0 text-right" style={{ width: '22%' }}>After</th>
+                <th className="truncate px-2 py-1.5 min-w-0 text-right" style={{ width: '31%' }}>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {["SPD", "DI", "EOD", "AOD"].map(m => (
+                <DeltaRow 
+                  key={m} 
+                  label={m} 
+                  before={getVal(before, m)} 
+                  after={getVal(after, m)} 
+                />
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 

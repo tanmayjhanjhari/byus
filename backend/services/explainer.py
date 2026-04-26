@@ -208,52 +208,8 @@ class BiasExplainer:
         historical_skew: float,
     ) -> str:
         """Synthesise a plain-English explanation from all computed signals."""
-        parts: list[str] = []
-
-        # Proxy feature lead sentence
         if proxy_features and proxy_features[0]["correlation"] >= 0.3:
             top = proxy_features[0]
-            parts.append(
-                f"'{top['feature']}' is {top['strength']}ly correlated with "
-                f"'{sensitive_attr}' (r={top['correlation']:.2f}), meaning the model "
-                "may use it as a proxy for the protected attribute."
-            )
-
-        # Outcome gap
-        if positive_rate_gap > 0.05:
-            parts.append(
-                f"There is a {positive_rate_gap:.0%} outcome gap between demographic "
-                f"groups in '{target_col}', suggesting groups are treated differently."
-            )
-
-        # Data imbalance
-        if imbalance_flagged:
-            parts.append(
-                f"The training data is imbalanced across groups of '{sensitive_attr}', "
-                "which reduces the model's ability to learn fair representations for "
-                "smaller groups."
-            )
-
-        # Direct correlation
-        if correlation >= 0.3:
-            parts.append(
-                f"'{sensitive_attr}' itself has a notable direct correlation "
-                f"(r={correlation:.2f}) with the target '{target_col}', "
-                "indicating historical patterns of discrimination in the data."
-            )
-
-        # Historical skew
-        if historical_skew > 0.1:
-            parts.append(
-                "High variance in positive rates across groups suggests this dataset "
-                "reflects historical inequities that the model has learned and amplified."
-            )
-
-        if not parts:
-            return (
-                f"No strong bias signals were detected for '{sensitive_attr}'. "
-                "The observed metrics may reflect natural variation rather than systematic bias. "
-                "Continue to monitor with larger datasets."
-            )
-
-        return " ".join(parts)
+            return f"'{top['feature']}' correlates with '{sensitive_attr}' (r={top['correlation']:.2f}), {positive_rate_gap:.0%} outcome gap between groups."
+        
+        return f"{positive_rate_gap:.0%} outcome gap detected between groups of '{sensitive_attr}'. No strong proxy feature found."

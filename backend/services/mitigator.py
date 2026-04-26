@@ -42,13 +42,40 @@ class BiasMitigator:
     ) -> dict[str, Any]:
         """
         Run both mitigation strategies and return a unified comparison.
-
-        Returns
-        -------
-        dict with keys: reweigh, threshold, winner
         """
-        rew = self.reweigh(df, target_col, sensitive_attr)
-        thr = self.threshold_adjust(df, target_col, sensitive_attr)
+        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
+
+        # Binarize target
+        y = df_clean[target_col]
+        if set(y.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+            y_bin = y.astype(int)
+        elif y.nunique() == 2:
+            vals = sorted(y.unique())
+            y_bin = y.map({vals[0]: 0, vals[1]: 1})
+        elif pd.api.types.is_numeric_dtype(y):
+            median = y.median()
+            y_bin = (y > median).astype(int)
+        else:
+            y_bin = (y == y.mode()[0]).astype(int)
+        df_clean['__target__'] = y_bin
+
+        # Encode sensitive attr
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        df_clean['__sens__'] = le.fit_transform(df_clean[sensitive_attr].astype(str))
+
+        # Select numeric features
+        feature_cols = [c for c in df_clean.columns
+                        if c not in [target_col, sensitive_attr, '__target__', '__sens__']
+                        and df_clean[c].dtype in ['int64', 'float64']]
+        if not feature_cols:
+            raise ValueError("No numeric feature columns found for mitigation.")
+        
+        # Fill NA with 0 for features
+        df_clean[feature_cols] = df_clean[feature_cols].fillna(0)
+
+        rew = self.reweigh(df_clean, feature_cols)
+        thr = self.threshold_adjust(df_clean, feature_cols)
 
         # Winner: best SPD reduction while keeping accuracy drop < 3%
         winner = self._pick_winner(rew, thr)
@@ -63,92 +90,106 @@ class BiasMitigator:
 
     def reweigh(
         self,
-        df: pd.DataFrame,
-        target_col: str,
-        sensitive_attr: str,
+        df_clean: pd.DataFrame,
+        feature_cols: list[str],
     ) -> dict[str, Any]:
         """
         Compute sample weights based on the ratio of expected to actual
         joint frequency of (group, label), then retrain a classifier.
         """
-        work = df.copy().dropna(subset=[target_col, sensitive_attr])
+        n_total = len(df_clean)
+        weights = np.ones(n_total)
+        weights_summary = []
+        weight_map = {}
 
-        # ── Weight computation ────────────────────────────────────────────────
-        n = len(work)
-        p_group = work[sensitive_attr].value_counts(normalize=True)
-        p_label = work[target_col].value_counts(normalize=True)
+        groups = df_clean['__sens__'].unique()
+        labels = df_clean['__target__'].unique()
 
-        weights = np.ones(n)
-        weights_summary: list[dict] = []
+        for g in groups:
+            for l in labels:
+                n_group = (df_clean['__sens__'] == g).sum()
+                n_label = (df_clean['__target__'] == l).sum()
+                n_group_label = ((df_clean['__sens__'] == g) & (df_clean['__target__'] == l)).sum()
 
-        for group_val, grp_idx in work.groupby(sensitive_attr).groups.items():
-            for label_val in work[target_col].unique():
-                mask = (work[sensitive_attr] == group_val) & (
-                    work[target_col] == label_val
-                )
-                actual_freq = mask.mean()
-                expected_freq = float(p_group.get(group_val, 0)) * float(
-                    p_label.get(label_val, 0)
-                )
-                w = (
-                    expected_freq / actual_freq
-                    if actual_freq > 0
-                    else 1.0
-                )
-                weights[mask] = w
-                weights_summary.append(
-                    {
-                        "group": str(group_val),
-                        "label": str(label_val),
-                        "weight": round(w, 4),
-                        "actual_freq": round(actual_freq, 4),
-                        "expected_freq": round(expected_freq, 4),
-                    }
-                )
+                if n_group_label == 0:
+                    w = 1.0
+                else:
+                    w = (n_group / n_total) * (n_label / n_total) / (n_group_label / n_total)
+                
+                # Clip to prevent extreme values
+                w = max(0.1, min(10.0, w))
+                weight_map[(g, l)] = w
 
-        # ── Before / after metrics ────────────────────────────────────────────
-        before = self._compute_metrics(work, target_col, sensitive_attr)
-        after = self._compute_metrics(
-            work, target_col, sensitive_attr, sample_weight=weights
+                weights_summary.append({
+                    "group": str(g),
+                    "label": str(l),
+                    "weight": round(w, 4)
+                })
+
+        for i, row in enumerate(df_clean.itertuples(index=False)):
+            g = getattr(row, '__sens__')
+            l = getattr(row, '__target__')
+            weights[i] = weight_map.get((g, l), 1.0)
+
+        X = df_clean[feature_cols].values
+        y = df_clean['__target__'].values
+        s = df_clean['__sens__'].values
+
+        X_train, X_test, y_train, y_test, s_train, s_test, w_train, _ = train_test_split(
+            X, y, s, weights, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y
         )
-        eff = self.effects(before, after)
+
+        # BEFORE metrics
+        model_before = LogisticRegression(max_iter=1000, random_state=self.RANDOM_STATE)
+        model_before.fit(X_train, y_train)
+        y_pred_before = model_before.predict(X_test)
+        before_metrics = {
+            "SPD": self._compute_spd(y_pred_before, s_test),
+            "DI": self._compute_di(y_pred_before, s_test),
+            "EOD": self._compute_eod(y_pred_before, y_test, s_test),
+            "AOD": self._compute_aod(y_pred_before, y_test, s_test),
+            "accuracy": round(accuracy_score(y_test, y_pred_before), 4),
+            "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
+            "recall": round(recall_score(y_test, y_pred_before, zero_division=0), 4),
+            "f1": round(f1_score(y_test, y_pred_before, zero_division=0), 4),
+        }
+
+        # AFTER metrics
+        model_after = LogisticRegression(max_iter=1000, random_state=self.RANDOM_STATE)
+        model_after.fit(X_train, y_train, sample_weight=w_train)
+        y_pred_after = model_after.predict(X_test)
+        after_metrics = {
+            "SPD": self._compute_spd(y_pred_after, s_test),
+            "DI": self._compute_di(y_pred_after, s_test),
+            "EOD": self._compute_eod(y_pred_after, y_test, s_test),
+            "AOD": self._compute_aod(y_pred_after, y_test, s_test),
+            "accuracy": round(accuracy_score(y_test, y_pred_after), 4),
+            "precision": round(precision_score(y_test, y_pred_after, zero_division=0), 4),
+            "recall": round(recall_score(y_test, y_pred_after, zero_division=0), 4),
+            "f1": round(f1_score(y_test, y_pred_after, zero_division=0), 4),
+        }
+
+        eff = self.effects(before_metrics, after_metrics)
 
         return {
-            "before": before,
-            "after": after,
+            "before": before_metrics,
+            "after": after_metrics,
             "effects": eff,
             "weights_summary": weights_summary,
         }
 
     # ── Threshold Adjustment ──────────────────────────────────────────────────
 
-    def threshold_adjust(self, df, target_col, sensitive_attr):
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.model_selection import train_test_split
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    def threshold_adjust(self, df_clean: pd.DataFrame, feature_cols: list[str]):
         import numpy as np
 
-        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
-
-        # Encode sensitive attr and target
-        from sklearn.preprocessing import LabelEncoder
-        le_target = LabelEncoder()
-        le_sens = LabelEncoder()
-        y = le_target.fit_transform(df_clean[target_col].astype(str))
-        s = le_sens.fit_transform(df_clean[sensitive_attr].astype(str))
-
-        # Feature columns: numeric only, exclude target and sensitive
-        feature_cols = [c for c in df_clean.columns
-                        if c != target_col and c != sensitive_attr
-                        and df_clean[c].dtype in ['int64', 'float64']]
-        if not feature_cols:
-            raise ValueError("No numeric feature columns found for threshold adjustment.")
-
-        X = df_clean[feature_cols].fillna(0).values
+        X = df_clean[feature_cols].values
+        y = df_clean['__target__'].values
+        s = df_clean['__sens__'].values
 
         # Fixed seed for reproducibility
         X_train, X_test, y_train, y_test, s_train, s_test = train_test_split(
-            X, y, s, test_size=0.3, random_state=42, stratify=y
+            X, y, s, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y
         )
 
         model = LogisticRegression(max_iter=1000, random_state=42)

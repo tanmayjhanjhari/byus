@@ -37,15 +37,11 @@ export default function ReportPage() {
     const fetchRecommendations = async () => {
       setRecsLoading(true);
       try {
-        const { data } = await client.post("/api/gemini-chat", {
-          session_id: sessionId,
-          message: "Give me 3 specific recommendations to fix the bias found in this dataset.",
-          history: [] // New chat context
-        });
-        if (data.reply && data.reply.includes("trouble connecting")) {
+        const { data } = await client.get(`/api/action-plan/${sessionId}`);
+        if (!data.action_plan) {
           throw new Error("API rate limit or connection issue");
         }
-        setRecommendations(data.reply);
+        setRecommendations(data.action_plan);
       } catch {
         setRecommendations(
           "1. Apply Pre-processing Mitigation: Use algorithms like Reweighing to adjust the weights of the training data, ensuring the model doesn't learn historical biases.\n\n" +

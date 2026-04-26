@@ -14,10 +14,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from services.reporter import ReportGenerator
+from services.gemini_service import GeminiService
 
 router = APIRouter(tags=["Report"])
 
 reporter = ReportGenerator()
+gemini = GeminiService()
 
 
 @router.get("/report/{session_id}", status_code=status.HTTP_200_OK)
@@ -68,3 +70,27 @@ async def download_report(
             "Content-Length": str(len(pdf_bytes)),
         },
     )
+
+@router.get("/action-plan/{session_id}", status_code=status.HTTP_200_OK)
+async def get_action_plan(
+    session_id: str,
+    request: Request,
+) -> dict[str, str]:
+    sessions: dict = request.app.state.sessions
+
+    if session_id not in sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+
+    session = sessions[session_id]
+
+    try:
+        plan = gemini.get_action_plan(session)
+        return {"action_plan": plan}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate action plan: {exc}",
+        )

@@ -121,121 +121,134 @@ class BiasEngine:
         label_col: str,
     ) -> dict[str, Any]:
         """Compute all metrics for a single sensitive attribute."""
+        feature_cols = [c for c in sub.columns if c not in [target_col, attr, label_col]]
+        # Step 1 — always work on a clean copy
+        df_work = sub[[target_col, attr, label_col] + feature_cols].copy()
+        df_work = df_work.dropna(subset=[target_col, attr])
 
-        # ── Group statistics ──────────────────────────────────────────────────
-        group_stats = self._group_stats(sub, attr, label_col)
+        # Step 2 — binarize target robustly
+        y = df_work[label_col]
+        if set(y.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+            y_bin = y.astype(int)
+        elif y.nunique() == 2:
+            vals = sorted(y.unique())
+            y_bin = y.map({vals[0]: 0, vals[1]: 1})
+        elif pd.api.types.is_numeric_dtype(y):
+            median = y.median()
+            y_bin = (y > median).astype(int)
+        else:
+            y_bin = (y == y.mode()[0]).astype(int)
+        df_work['__target__'] = y_bin
 
-        # Privileged = largest group
-        privileged = max(group_stats, key=lambda g: group_stats[g]["count"])
-        unprivileged_groups = [g for g in group_stats if g != privileged]
+        # Step 3 — encode sensitive attribute as integers
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        df_work['__sens__'] = le.fit_transform(df_work[attr].astype(str))
+        group_names = {i: name for i, name in enumerate(le.classes_)}
 
-        if not unprivileged_groups:
-            # Only one group — metrics are meaningless
+        warnings_list = []
+
+        # Step 4 — compute group positive rates
+        groups = df_work['__sens__'].unique()
+        group_stats = {}
+        for g in groups:
+            mask = df_work['__sens__'] == g
+            group_name = group_names[g]
+            count = int(mask.sum())
+            if count <= 1:
+                warnings_list.append(f"Group '{group_name}' has only {count} member(s) — excluded from metrics.")
+                continue
+            pos_rate = float(df_work.loc[mask, '__target__'].mean())
+            group_stats[str(group_name)] = {
+                "count": count,
+                "positive_rate": round(pos_rate, 4),
+                "pct_of_total": round(count / len(df_work) * 100, 1)
+            }
+
+        if len(group_stats) < 2:
             return {
-                "error": f"'{attr}' has only one unique group after null removal.",
+                "error": f"'{attr}' has fewer than 2 valid groups after filtering.",
                 "group_stats": group_stats,
             }
 
-        # Pick the *most disadvantaged* unprivileged group for scalar metrics
-        unprivileged = min(
-            unprivileged_groups,
-            key=lambda g: group_stats[g]["positive_rate"],
-        )
+        # Step 5 — find privileged and unprivileged
+        priv_name = max(group_stats, key=lambda g: group_stats[g]["positive_rate"])
+        unpriv_name = min(group_stats, key=lambda g: group_stats[g]["positive_rate"])
+        priv_rate = group_stats[priv_name]["positive_rate"]
+        unpriv_rate = group_stats[unpriv_name]["positive_rate"]
 
-        pr_priv = group_stats[privileged]["positive_rate"]
-        pr_unpriv = group_stats[unprivileged]["positive_rate"]
+        # Step 6 — compute metrics
+        SPD = round(priv_rate - unpriv_rate, 4)
+        DI = round(unpriv_rate / priv_rate, 4) if priv_rate > 0 else 0.0
 
-        # ── SPD ───────────────────────────────────────────────────────────────
-        spd = float(pr_priv - pr_unpriv)
-
-        # ── DI ────────────────────────────────────────────────────────────────
-        if pr_priv == 0:
-            di = float("nan")
+        if label_col != target_col:
+            y_true = df_work[target_col]
+            if set(y_true.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+                y_true_bin = y_true.astype(int)
+            elif y_true.nunique() == 2:
+                vals = sorted(y_true.unique())
+                y_true_bin = y_true.map({vals[0]: 0, vals[1]: 1})
+            elif pd.api.types.is_numeric_dtype(y_true):
+                median = y_true.median()
+                y_true_bin = (y_true > median).astype(int)
+            else:
+                y_true_bin = (y_true == y_true.mode()[0]).astype(int)
+            df_work['__truth__'] = y_true_bin
+            
+            priv_encoded = next(k for k, v in group_names.items() if str(v) == priv_name)
+            unpriv_encoded = next(k for k, v in group_names.items() if str(v) == unpriv_name)
+            eod, aod = self._equal_opportunity_encoded(df_work, '__truth__', '__target__', '__sens__', priv_encoded, unpriv_encoded)
+            EOD = round(eod, 4) if eod is not None else None
+            AOD = round(aod, 4) if aod is not None else None
         else:
-            di = float(pr_unpriv / pr_priv)
+            EOD = None
+            AOD = None
 
-        # ── EOD & AOD ─────────────────────────────────────────────────────────
-        eod, aod = self._equal_opportunity(sub, attr, target_col, label_col, privileged, unprivileged)
+        if SPD > 0.99 and DI < 0.01:
+            warnings_list.append("Metrics look extreme. Check that target column is correctly binary and sensitive attribute has meaningful variation.")
 
-        # ── Severity ──────────────────────────────────────────────────────────
-        severity = self._severity(spd)
+        # Step 7 — bootstrapped CI for SPD
+        spd_samples = []
+        for _ in range(self.BOOTSTRAP_N):
+            sample = df_work.sample(frac=1.0, replace=True, random_state=None)
+            rates = sample.groupby('__sens__')['__target__'].mean()
+            if len(rates) >= 2:
+                spd_samples.append(float(rates.max() - rates.min()))
+        if spd_samples:
+            ci_low = round(float(np.percentile(spd_samples, 2.5)), 4)
+            ci_high = round(float(np.percentile(spd_samples, 97.5)), 4)
+            statistically_significant = not (ci_low <= 0 <= ci_high)
+        else:
+            ci_low, ci_high, statistically_significant = None, None, True
 
-        # ── Legal flag ────────────────────────────────────────────────────────
-        legal_flag = (not np.isnan(di)) and (di < 0.8)
-
-        # ── Bootstrapped CI on SPD ────────────────────────────────────────────
-        ci, significant = self._bootstrap_spd_ci(sub, attr, label_col, privileged, unprivileged)
-
-        # ── Assemble ──────────────────────────────────────────────────────────
-        result: dict[str, Any] = {
-            "privileged_group": str(privileged),
-            "unprivileged_group": str(unprivileged),
-            "group_stats": {
-                str(k): v for k, v in group_stats.items()
-            },
-            "spd": round(spd, 4),
-            "di": round(di, 4) if not np.isnan(di) else None,
-            "eod": round(eod, 4) if eod is not None else None,
-            "aod": round(aod, 4) if aod is not None else None,
-            "severity": severity,
-            "legal_flag": legal_flag,
-            "bootstrapped_ci": ci,
-            "statistically_significant": significant,
+        return {
+            "privileged_group": str(priv_name),
+            "unprivileged_group": str(unpriv_name),
+            "group_stats": group_stats,
+            "spd": SPD,
+            "di": DI,
+            "eod": EOD,
+            "aod": AOD,
+            "severity": self._severity(SPD),
+            "legal_flag": DI < 0.8,
+            "bootstrapped_ci": {"low_95": ci_low, "high_95": ci_high},
+            "statistically_significant": statistically_significant,
+            "warnings": warnings_list
         }
 
-        return result
-
-    # ── Group stats ───────────────────────────────────────────────────────────
-
-    def _group_stats(
+    def _equal_opportunity_encoded(
         self,
         sub: pd.DataFrame,
-        attr: str,
-        label_col: str,
-    ) -> dict[Any, dict[str, float]]:
-        total = len(sub)
-        stats: dict[Any, dict[str, float]] = {}
-        for group_val, grp in sub.groupby(attr):
-            count = len(grp)
-            positive_rate = float(grp[label_col].mean())
-            stats[group_val] = {
-                "count": count,
-                "positive_rate": round(positive_rate, 4),
-                "pct_of_total": round(count / total * 100, 2),
-            }
-        return stats
-
-    # ── EOD / AOD ─────────────────────────────────────────────────────────────
-
-    def _equal_opportunity(
-        self,
-        sub: pd.DataFrame,
-        attr: str,
+        truth_col: str,
         target_col: str,
-        label_col: str,
+        sens_col: str,
         privileged: Any,
         unprivileged: Any,
     ) -> tuple[float | None, float | None]:
-        """
-        Return (EOD, AOD).
-
-        EOD = TPR_privileged - TPR_unprivileged
-        AOD = mean(TPR_diff, FPR_diff)
-
-        If ground-truth labels equal the label column (label_col == target_col
-        or no separate predictions exist), EOD/AOD are computed against the
-        single label column treating it as both prediction and truth —
-        in that case TPR=1 for all groups, so we fall back to None to avoid
-        misleading 0.0 values.
-        """
-        if label_col == target_col:
-            # No separate model predictions — cannot compute TPR/FPR meaningfully
-            return None, None
-
         def tpr_fpr(mask: pd.Series) -> tuple[float, float]:
             grp = sub[mask]
-            actual = grp[target_col]
-            pred = grp[label_col]
+            actual = grp[truth_col]
+            pred = grp[target_col]
             tp = int(((pred == 1) & (actual == 1)).sum())
             fn = int(((pred == 0) & (actual == 1)).sum())
             fp = int(((pred == 1) & (actual == 0)).sum())
@@ -244,8 +257,8 @@ class BiasEngine:
             fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
             return tpr, fpr
 
-        priv_mask = sub[attr] == privileged
-        unpriv_mask = sub[attr] == unprivileged
+        priv_mask = sub[sens_col] == privileged
+        unpriv_mask = sub[sens_col] == unprivileged
 
         tpr_priv, fpr_priv = tpr_fpr(priv_mask)
         tpr_unpriv, fpr_unpriv = tpr_fpr(unpriv_mask)
@@ -308,43 +321,40 @@ class BiasEngine:
 
     @staticmethod
     def _grade(score: float) -> str:
-        if score >= 90:
+        if score >= 85:
             return "A (Fair)"
-        elif score >= 75:
+        elif score >= 70:
             return "B (Minor issues)"
-        elif score >= 55:
+        elif score >= 50:
             return "C (Moderate bias)"
         else:
             return "F (High bias — action required)"
 
     def _compute_audit_score(self, metrics_per_attr: dict) -> float:
+        if not metrics_per_attr:
+            return 100.0
         penalties = []
         for attr, m in metrics_per_attr.items():
             if "error" in m:
                 continue
-            spd = abs(m.get("spd", m.get("SPD", 0)))
-            di = m.get("di", m.get("DI", 1.0))
-            if di is None or np.isnan(di):
-                di = 1.0
+            spd = abs(m.get("spd", m.get("SPD", 0)) or 0)
+            di = m.get("di", m.get("DI", 1.0)) or 1.0
+            eod = m.get("eod", m.get("EOD"))
 
-            # SPD penalty: scaled aggressively
-            spd_penalty = spd * 250
+            # SPD penalty: 0.1→15pts, 0.2→35pts, 0.3→55pts, 0.5→80pts
+            spd_penalty = min(80, spd * 160)
 
-            # DI penalty: heavy if below legal 0.8 threshold
-            if di < 0.8:
-                di_penalty = (0.8 - di) * 150
-            else:
-                di_penalty = 0
+            # DI penalty: only when below 0.8 legal threshold
+            di_penalty = min(45, max(0, (0.8 - di) * 75)) if di < 0.8 else 0
 
             # EOD penalty if available
-            eod = m.get("eod", m.get("EOD"))
-            eod_penalty = abs(eod) * 100 if eod is not None and not np.isnan(eod) else 0
+            eod_penalty = min(20, abs(eod) * 60) if eod is not None and not np.isnan(eod) else 0
 
             penalties.append(spd_penalty + di_penalty + eod_penalty)
 
         if not penalties:
             return 100.0
-            
+
         total_penalty = sum(penalties) / max(len(penalties), 1)
         score = max(0.0, min(100.0, 100.0 - total_penalty))
         return float(round(score, 1))

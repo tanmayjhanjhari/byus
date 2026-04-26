@@ -14,10 +14,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from services.explainer import BiasExplainer
+from services.gemini_service import GeminiService
 
 router = APIRouter(tags=["Explanation"])
 
 explainer = BiasExplainer()
+gemini = GeminiService()
 
 
 class ExplainRequest(BaseModel):
@@ -76,6 +78,25 @@ async def explain(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Explanation failed: {exc}",
         )
+
+    # ── Call Gemini for narrative explanation ─────────────────────────────────
+    scenario_data = session.get("scenario", {})
+    scenario = scenario_data.get("scenario", "unknown")
+    
+    bias_results = session.get("bias_results", {})
+    metrics_per_attr = bias_results.get("metrics_per_attr", {})
+    attr_metrics = metrics_per_attr.get(body.sensitive_attr, {})
+
+    plain_reason = explanation.get("plain_reason", "")
+    
+    gemini_explanation = gemini.explain_bias(
+        metrics=attr_metrics,
+        sensitive_attr=body.sensitive_attr,
+        scenario=scenario,
+        plain_reason=plain_reason
+    )
+    
+    explanation["gemini_explanation"] = gemini_explanation
 
     # ── Persist in session (keyed by attribute for multi-attr support) ────────
     if "explanations" not in session:
