@@ -99,7 +99,12 @@ Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
             response = _model.generate_content(prompt)
             return response.text.strip()
         except Exception:
-            return plain_reason
+            return (
+                "The AI service is currently unavailable to generate a narrative explanation. "
+                "Based on the statistical findings above, there is a measurable disparity in how this attribute "
+                "correlates with the model's target outcome. Please review the proxy features and group metrics "
+                "to determine if this disparity is due to historical bias, imbalanced sampling, or valid domain factors."
+            )
 
     # ── Action Plan ───────────────────────────────────────────────────────────
 

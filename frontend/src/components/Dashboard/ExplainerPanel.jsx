@@ -100,7 +100,7 @@ export default function ExplainerPanel({ attrName }) {
       {/* ── Plain Reason Callout ───────────────────────────────────────────── */}
       {plain_reason && (
         <div className="pl-4 py-2 border-l-4 border-accent">
-          <p className="text-base text-textPrimary leading-relaxed">
+          <p className="text-lg font-medium text-textPrimary leading-relaxed">
             {plain_reason}
           </p>
         </div>
@@ -120,7 +120,7 @@ export default function ExplainerPanel({ attrName }) {
         </div>
 
         {geminiExplanation ? (
-          <div className="space-y-4 text-sm text-textPrimary leading-relaxed">
+          <div className="space-y-4 text-base text-textPrimary leading-relaxed">
             {geminiExplanation.split('\n\n').map((para, i) => (
               <p key={i}>{para}</p>
             ))}
