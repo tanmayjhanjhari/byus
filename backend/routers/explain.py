@@ -66,12 +66,18 @@ async def explain(
             detail=f"Sensitive attribute '{body.sensitive_attr}' not found in dataset.",
         )
 
+    # ── Fetch Metrics ─────────────────────────────────────────────────────────
+    bias_results = session.get("bias_results", {})
+    metrics_per_attr = bias_results.get("metrics_per_attr", {})
+    attr_metrics = metrics_per_attr.get(body.sensitive_attr, {})
+
     # ── Run explainer ─────────────────────────────────────────────────────────
     try:
         explanation = explainer.explain(
             df=df,
             target_col=body.target_col,
             sensitive_attr=body.sensitive_attr,
+            metrics=attr_metrics,
         )
     except Exception as exc:
         raise HTTPException(
@@ -83,10 +89,6 @@ async def explain(
     scenario_data = session.get("scenario", {})
     scenario = scenario_data.get("scenario", "unknown")
     
-    bias_results = session.get("bias_results", {})
-    metrics_per_attr = bias_results.get("metrics_per_attr", {})
-    attr_metrics = metrics_per_attr.get(body.sensitive_attr, {})
-
     plain_reason = explanation.get("plain_reason", "")
     
     gemini_explanation = gemini.explain_bias(

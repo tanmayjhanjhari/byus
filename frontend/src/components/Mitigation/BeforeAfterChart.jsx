@@ -8,6 +8,7 @@ import {
   XAxis,
   YAxis
 } from "recharts";
+import { Info } from "lucide-react";
 
 const getVal = (obj, key) => obj?.[key] ?? obj?.[key.toUpperCase()] ?? obj?.[key.toLowerCase()] ?? 0;
 
@@ -77,6 +78,15 @@ export default function BeforeAfterChart({ mitigation }) {
           <Bar dataKey="Threshold" fill="#818CF8" radius={[2, 2, 0, 0]} isAnimationActive={true} />
         </BarChart>
       </ResponsiveContainer>
+      
+      {mitigation.reweigh?.explanation?.graph_explanation && (
+        <div className="mt-6 flex items-start gap-2 bg-surface/50 rounded-lg p-3 border border-white/[0.04]">
+          <Info size={16} className="text-textSecondary flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-textSecondary leading-relaxed">
+            {mitigation.reweigh.explanation.graph_explanation}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -29,6 +29,7 @@ class BiasExplainer:
         df: pd.DataFrame,
         target_col: str,
         sensitive_attr: str,
+        metrics: dict | None = None,
     ) -> dict[str, Any]:
         """
         Run all explanation analyses and return a unified dict.
@@ -97,6 +98,139 @@ class BiasExplainer:
             historical_skew=historical_skew,
         )
 
+        # --- WHY IS SPD THIS VALUE ---
+        spd_val = abs(metrics.get("SPD", 0) or 0) if metrics else abs(positive_rate_gap)
+        group_stats = metrics.get("group_stats", {}) if metrics else {}
+
+        if group_stats:
+            sorted_groups = sorted(group_stats.items(),
+                                   key=lambda x: x[1].get("positive_rate", 0))
+            worst_group_name = sorted_groups[0][0]
+            worst_rate = sorted_groups[0][1].get("positive_rate", 0)
+            best_group_name = sorted_groups[-1][0]
+            best_rate = sorted_groups[-1][1].get("positive_rate", 0)
+            worst_count = sorted_groups[0][1].get("count", 0)
+            best_count = sorted_groups[-1][1].get("count", 0)
+            total = sum(g[1].get("count",0) for g in sorted_groups)
+        else:
+            worst_group_name = "disadvantaged group"
+            best_group_name = "advantaged group"
+            worst_rate = 0
+            best_rate = 1
+            worst_count = 0
+            best_count = 0
+            total = 1
+
+        gap_pct = round(abs(best_rate - worst_rate) * 100, 1)
+        size_ratio = round(worst_count / max(best_count, 1), 2)
+        is_imbalanced = size_ratio < 0.5
+
+        # Build spd_explanation — plain English reason WHY spd is this number
+        if spd_val < 0.05:
+            spd_explanation = (
+                f"SPD of {spd_val:.3f} is very close to 0, which means nearly ideal "
+                f"fairness for '{sensitive_attr}'. The outcome rates across groups are "
+                f"almost identical — this could mean the model genuinely treats groups "
+                f"equally, OR that everyone is getting the same outcome regardless of "
+                f"group (e.g. nearly everyone approved), which can mask real-world "
+                f"discrimination hidden in other ways."
+            )
+        elif spd_val < 0.1:
+            spd_explanation = (
+                f"SPD of {spd_val:.3f} shows a small but real gap. "
+                f"'{best_group_name}' gets positive outcomes {best_rate:.0%} of the time "
+                f"vs {worst_rate:.0%} for '{worst_group_name}' — a {gap_pct}% difference. "
+                f"While below the high-severity threshold, this gap affects real people "
+                f"and should be monitored."
+            )
+        elif spd_val < 0.2:
+            spd_explanation = (
+                f"SPD of {spd_val:.3f} shows medium bias. "
+                f"'{best_group_name}' receives positive outcomes {best_rate:.0%} of the time "
+                f"compared to only {worst_rate:.0%} for '{worst_group_name}' — "
+                f"a {gap_pct} percentage point gap. In practical terms, for every 100 "
+                f"people from '{worst_group_name}', approximately {round(gap_pct)} fewer "
+                f"receive a positive outcome compared to '{best_group_name}'."
+            )
+        else:
+            spd_explanation = (
+                f"SPD of {spd_val:.3f} indicates HIGH bias. "
+                f"'{best_group_name}' gets positive outcomes {best_rate:.0%} of the time "
+                f"while '{worst_group_name}' gets them only {worst_rate:.0%} of the time — "
+                f"a {gap_pct} percentage point difference. This means for every 100 "
+                f"people from '{worst_group_name}', roughly {round(gap_pct)} of them miss "
+                f"out on positive outcomes purely based on their group membership."
+            )
+
+        # --- WHY IS DI THIS VALUE ---
+        di_val = metrics.get("DI", 1.0) or 1.0 if metrics else 1.0
+        if di_val >= 0.8:
+            di_explanation = (
+                f"Disparate Impact of {di_val:.3f} is above the legal 0.8 threshold. "
+                f"The ratio of positive outcome rates ({worst_rate:.0%} ÷ {best_rate:.0%}) "
+                f"meets the legal '80% rule' used in employment and lending regulation. "
+                f"However, passing this threshold does not mean no bias exists."
+            )
+        elif di_val >= 0.5:
+            di_explanation = (
+                f"Disparate Impact of {di_val:.3f} FAILS the legal 0.8 threshold. "
+                f"'{worst_group_name}' receives positive outcomes at only "
+                f"{di_val:.0%} the rate of '{best_group_name}' "
+                f"({worst_rate:.0%} vs {best_rate:.0%}). Under US employment law "
+                f"(EEOC guidelines) and EU anti-discrimination directives, this level "
+                f"of disparity is considered evidence of indirect discrimination."
+            )
+        else:
+            di_explanation = (
+                f"Disparate Impact of {di_val:.3f} is severely below the legal 0.8 threshold. "
+                f"'{worst_group_name}' receives positive outcomes at less than half the rate "
+                f"of '{best_group_name}' ({worst_rate:.0%} vs {best_rate:.0%}). "
+                f"This level of disparity would likely not survive legal scrutiny in "
+                f"most jurisdictions that have fairness regulations."
+            )
+
+        # --- WHY NEAR-ZERO SPD CAN STILL MEAN BIAS ---
+        ceiling_effect = False
+        ceiling_explanation = None
+        if best_rate > 0.90:
+            ceiling_effect = True
+            ceiling_explanation = (
+                f"Important caveat: '{best_group_name}' already has a {best_rate:.0%} "
+                f"approval rate — nearly everyone gets approved. When approval rates are "
+                f"this high, SPD cannot detect meaningful gaps because there is no 'room' "
+                f"for disparity to show. This is called a ceiling effect. "
+                f"The real bias may be hidden — for example in which cases get flagged "
+                f"for manual review, or in continuous scores rather than binary outcomes."
+            )
+
+        # --- DATA IMBALANCE EXPLANATION ---
+        if is_imbalanced:
+            imbalance_explanation = (
+                f"'{worst_group_name}' has {worst_count} records vs {best_count} for "
+                f"'{best_group_name}' (ratio {size_ratio:.2f}). This imbalance means "
+                f"the model has seen far fewer examples of '{worst_group_name}' during "
+                f"training, reducing its ability to make accurate and fair decisions "
+                f"for this group."
+            )
+        else:
+            imbalance_explanation = (
+                f"Group sizes are reasonably balanced: '{worst_group_name}' has "
+                f"{worst_count} records and '{best_group_name}' has {best_count}. "
+                f"Imbalance is not a major driver of bias here."
+            )
+
+        # --- PROXY EXPLANATION (if proxy found) ---
+        proxy_explanation = None
+        if proxy_features and proxy_features[0].get("correlation", 0) > 0.15:
+            top = proxy_features[0]
+            proxy_explanation = (
+                f"'{top['feature']}' is correlated with '{sensitive_attr}' "
+                f"(r={top['correlation']:.2f}). This means even if '{sensitive_attr}' "
+                f"is removed from the model, '{top['feature']}' can act as a hidden "
+                f"stand-in and produce the same discriminatory outcome. This is called "
+                f"proxy discrimination and is often harder to detect than direct bias."
+            )
+
         return {
             "sensitive_attr": sensitive_attr,
             "target_col": target_col,
@@ -106,6 +240,15 @@ class BiasExplainer:
             "historical_skew": historical_skew,
             "positive_rate_gap": positive_rate_gap,
             "plain_reason": plain_reason,
+            "spd_explanation": spd_explanation,
+            "di_explanation": di_explanation,
+            "ceiling_effect": ceiling_effect,
+            "ceiling_explanation": ceiling_explanation,
+            "imbalance_explanation": imbalance_explanation,
+            "proxy_explanation": proxy_explanation,
+            "worst_group": {"name": worst_group_name, "rate": worst_rate, "count": worst_count},
+            "best_group": {"name": best_group_name, "rate": best_rate, "count": best_count},
+            "gap_pct": gap_pct,
         }
 
     # ── Helpers ───────────────────────────────────────────────────────────────

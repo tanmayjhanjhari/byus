@@ -77,13 +77,153 @@ class BiasMitigator:
         rew = self.reweigh(df, target_col, sensitive_attr)
         thr = self.threshold_adjust(df_clean, feature_cols)
 
-        # Winner: best SPD reduction while keeping accuracy drop < 3%
-        winner = self._pick_winner(rew, thr)
+        # Generate explanations
+        reweigh_explanation = self.generate_mitigation_explanation(
+            rew["before"], rew["after"],
+            "reweigh", sensitive_attr, rew["effects"]
+        )
+        threshold_explanation = self.generate_mitigation_explanation(
+            thr["before"], thr["after"],
+            "threshold", sensitive_attr, thr["effects"]
+        )
+        
+        rew["explanation"] = reweigh_explanation
+        thr["explanation"] = threshold_explanation
+        
+        # Winner reasoning
+        if winner == "reweigh":
+            w_bias = rew["effects"].get("bias_reduction_pct", 0)
+            w_acc = rew["effects"].get("accuracy_retained_pct", 100)
+            l_bias = thr["effects"].get("bias_reduction_pct", 0)
+            l_acc = thr["effects"].get("accuracy_retained_pct", 100)
+            winner_reason = (
+                f"Reweighing is recommended because it achieved {w_bias:.0f}% "
+                f"bias reduction with {w_acc:.0f}% accuracy retained, "
+                f"outperforming threshold adjustment ({l_bias:.0f}% bias reduction, "
+                f"{l_acc:.0f}% accuracy retained)."
+            )
+        else:
+            w_bias = thr["effects"].get("bias_reduction_pct", 0)
+            w_acc = thr["effects"].get("accuracy_retained_pct", 100)
+            l_bias = rew["effects"].get("bias_reduction_pct", 0)
+            l_acc = rew["effects"].get("accuracy_retained_pct", 100)
+            winner_reason = (
+                f"Threshold adjustment is recommended because it achieved {w_bias:.0f}% "
+                f"bias reduction with {w_acc:.0f}% accuracy retained, "
+                f"outperforming reweighing ({l_bias:.0f}% bias reduction, "
+                f"{l_acc:.0f}% accuracy retained)."
+            )
 
         return {
             "reweigh": rew,
             "threshold": thr,
             "winner": winner,
+            "winner_reason": winner_reason,
+        }
+
+    def generate_mitigation_explanation(self, before: dict, after: dict,
+                                        technique: str, sensitive_attr: str,
+                                        effects: dict) -> dict:
+        """Generate plain-English explanation of what mitigation did."""
+        
+        spd_before = abs(before.get("SPD", 0) or 0)
+        spd_after = abs(after.get("SPD", 0) or 0)
+        acc_before = before.get("accuracy", 0) or 0
+        acc_after = after.get("accuracy", 0) or 0
+        bias_reduction = effects.get("bias_reduction_pct", 0)
+        acc_retained = effects.get("accuracy_retained_pct", 100)
+        acc_delta = effects.get("accuracy_delta", 0)
+        
+        # What the technique actually did
+        if technique == "reweigh":
+            how_it_works = (
+                f"Reweighing works by giving more importance to underrepresented "
+                f"(group, outcome) combinations during training. For '{sensitive_attr}', "
+                f"cases where disadvantaged groups received positive outcomes were "
+                f"given higher weight, teaching the model to be more balanced."
+            )
+        else:
+            how_it_works = (
+                f"Threshold Adjustment works by finding different decision thresholds "
+                f"for each group of '{sensitive_attr}'. Instead of using one cutoff "
+                f"for everyone, the model uses group-specific cutoffs that equalise "
+                f"the True Positive Rate — meaning equally qualified people from "
+                f"different groups get equal chances."
+            )
+        
+        # What actually happened to bias
+        if spd_before == 0:
+            bias_result = "There was no measurable bias to reduce before mitigation."
+        elif bias_reduction >= 70:
+            bias_result = (
+                f"Bias was significantly reduced. SPD dropped from {spd_before:.3f} "
+                f"to {spd_after:.3f} — a {bias_reduction:.0f}% reduction. "
+                f"In practical terms, the outcome gap between groups narrowed "
+                f"from {spd_before*100:.1f}% to {spd_after*100:.1f}%."
+            )
+        elif bias_reduction >= 30:
+            bias_result = (
+                f"Bias was partially reduced. SPD dropped from {spd_before:.3f} "
+                f"to {spd_after:.3f} — a {bias_reduction:.0f}% improvement. "
+                f"Some gap remains between groups, but the disparity is meaningfully smaller."
+            )
+        elif bias_reduction > 0:
+            bias_result = (
+                f"Bias reduction was modest — only {bias_reduction:.0f}%. "
+                f"SPD moved from {spd_before:.3f} to {spd_after:.3f}. "
+                f"This often happens when the bias is deeply embedded in the "
+                f"feature relationships rather than just class imbalance, "
+                f"or when the sensitive attribute has too many unique groups."
+            )
+        else:
+            bias_result = (
+                f"This technique did not reduce bias for '{sensitive_attr}'. "
+                f"SPD remained at {spd_after:.3f}. This can happen when bias "
+                f"is driven by a proxy feature that this technique cannot address, "
+                f"or when group sizes are very unequal."
+            )
+        
+        # What happened to accuracy
+        if abs(acc_delta) < 0.005:
+            acc_result = (
+                f"Model accuracy was virtually unchanged ({acc_before:.1%} → "
+                f"{acc_after:.1%}), meaning fairness was improved at no real "
+                f"cost to predictive performance."
+            )
+        elif acc_delta < 0:
+            acc_result = (
+                f"Model accuracy dropped slightly from {acc_before:.1%} to "
+                f"{acc_after:.1%} (a {abs(acc_delta)*100:.1f}% reduction). "
+                f"This is the typical fairness-accuracy trade-off: making the "
+                f"model fairer for disadvantaged groups slightly reduces its "
+                f"overall optimisation. Whether this trade-off is acceptable "
+                f"is a business and ethical decision."
+            )
+        else:
+            acc_result = (
+                f"Interestingly, model accuracy slightly improved from "
+                f"{acc_before:.1%} to {acc_after:.1%}. This can happen when "
+                f"the original model was overfit to majority-group patterns, "
+                f"and mitigation forced it to learn more generalisable features."
+            )
+        
+        # What the graph is showing
+        graph_explanation = (
+            f"The Fairness Improvement chart compares SPD, DI, EOD, and AOD "
+            f"before mitigation (gray bars) vs after reweighing (teal) and after "
+            f"threshold adjustment (purple). Shorter bars are better — they mean "
+            f"the gap between groups is smaller. "
+            f"The Performance Trade-off chart plots each technique as a dot: "
+            f"further right means more bias reduction, higher up means more "
+            f"accuracy retained. The green 'Sweet Spot' zone is where both are high."
+        )
+        
+        return {
+            "how_it_works": how_it_works,
+            "bias_result": bias_result,
+            "acc_result": acc_result,
+            "graph_explanation": graph_explanation,
+            "summary": f"{bias_result} {acc_result}"
         }
 
     # ── Reweighing ────────────────────────────────────────────────────────────

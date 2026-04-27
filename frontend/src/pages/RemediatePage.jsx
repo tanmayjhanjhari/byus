@@ -147,11 +147,13 @@ export default function RemediatePage() {
                 name="reweigh" 
                 data={mitigation.reweigh} 
                 isWinner={mitigation.winner === "reweigh"} 
+                winnerReason={mitigation.winner_reason}
               />
               <TechniqueCard 
                 name="threshold" 
                 data={mitigation.threshold} 
                 isWinner={mitigation.winner === "threshold"} 
+                winnerReason={mitigation.winner_reason}
               />
             </div>
 

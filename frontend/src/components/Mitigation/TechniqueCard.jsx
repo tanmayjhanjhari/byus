@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowDown, ArrowUp, Info, Trophy } from "lucide-react";
+import { ArrowDown, ArrowUp, Info, Trophy, Settings, BarChart2, Zap } from "lucide-react";
 
 const getVal = (obj, key) => obj?.[key] ?? obj?.[key.toUpperCase()] ?? obj?.[key.toLowerCase()];
 
@@ -52,7 +52,7 @@ function MetricCompact({ label, before, after }) {
   );
 }
 
-export default function TechniqueCard({ name, data, isWinner }) {
+export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
   if (!data || !data.before || !data.after) return null;
 
   const title = name === "reweigh" ? "Reweighing" : "Threshold Adjustment";
@@ -80,12 +80,17 @@ export default function TechniqueCard({ name, data, isWinner }) {
           </h3>
           <p className="text-xs text-textSecondary mt-1 max-w-[250px]">{desc}</p>
         </div>
-        {isWinner && (
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent/10 border border-accent/20 text-accent text-xs font-bold uppercase tracking-wider">
-            <Trophy size={14} /> Recommended
-          </div>
-        )}
       </div>
+
+      {isWinner && winnerReason && (
+        <div className="mb-6 bg-accent/10 border border-accent/20 rounded-lg p-4 text-accent shadow-sm">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Trophy size={16} className="flex-shrink-0" />
+            <span className="font-bold text-sm">Why this is recommended:</span>
+          </div>
+          <p className="text-sm leading-relaxed opacity-90">{winnerReason}</p>
+        </div>
+      )}
 
       {/* ── Fairness Deltas ───────────────────────────────────────────────── */}
       <div className="mb-6">
@@ -140,6 +145,49 @@ export default function TechniqueCard({ name, data, isWinner }) {
                 : "it resulted in a more severe accuracy drop compared to the alternative."
             }
           </p>
+        </div>
+      )}
+
+      {/* ── Understanding this result ──────────────────────────────────────── */}
+      {data.explanation && (
+        <div className="mt-6 border-t border-white/[0.06] pt-4">
+          <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-3">
+            Understanding this result
+          </h4>
+          <div className="space-y-4">
+            <div className="flex gap-3 items-start">
+              <Settings size={16} className="text-textSecondary mt-0.5" />
+              <p className="text-xs text-textSecondary leading-relaxed">
+                {data.explanation.how_it_works}
+              </p>
+            </div>
+            
+            <div className="flex gap-3 items-start">
+              <BarChart2 size={16} className={
+                (effects.bias_reduction_pct || 0) > 50 ? "text-success" : 
+                (effects.bias_reduction_pct || 0) >= 10 ? "text-warning" : "text-danger"
+              } mt-0.5 />
+              <p className={`text-xs leading-relaxed ${
+                (effects.bias_reduction_pct || 0) > 50 ? "text-success-light" : 
+                (effects.bias_reduction_pct || 0) >= 10 ? "text-warning-light" : "text-danger-light"
+              }`}>
+                {data.explanation.bias_result}
+              </p>
+            </div>
+
+            <div className="flex gap-3 items-start">
+              <Zap size={16} className={
+                (effects.accuracy_retained_pct || 0) > 98 ? "text-success" : 
+                (effects.accuracy_retained_pct || 0) >= 90 ? "text-warning" : "text-danger"
+              } mt-0.5 />
+              <p className={`text-xs leading-relaxed ${
+                (effects.accuracy_retained_pct || 0) > 98 ? "text-success-light" : 
+                (effects.accuracy_retained_pct || 0) >= 90 ? "text-warning-light" : "text-danger-light"
+              }`}>
+                {data.explanation.acc_result}
+              </p>
+            </div>
+          </div>
         </div>
       )}
     </motion.div>
