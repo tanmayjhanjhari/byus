@@ -100,6 +100,30 @@ async def upload_csv(
         "row_count": row_count,
     }
 
+    NEVER_SENSITIVE = [
+        "decile_score", "decile_score1", "score_text", "v_decile_score",
+        "risk_score", "predicted", "prediction", "output", "label",
+        "target", "outcome", "result", "index", "id", "fnlwgt",
+        "capital_gain", "capital_loss", "hours_per_week"
+    ]
+
+    DEMOGRAPHIC_KEYWORDS = [
+        "gender", "sex", "race", "ethnicity", "age", "religion",
+        "income", "nationality", "disability", "marital"
+    ]
+
+    suggested_sensitive = []
+    blocked_from_sensitive = []
+
+    for c in df.columns:
+        c_lower = c.lower()
+        if c_lower in NEVER_SENSITIVE or any(c_lower.endswith(sfx) for sfx in ["_score", "_id", "_index", "_output", "_predicted"]):
+            if any(k in c_lower for k in DEMOGRAPHIC_KEYWORDS):
+                blocked_from_sensitive.append(c)
+        else:
+            if any(k in c_lower for k in DEMOGRAPHIC_KEYWORDS):
+                suggested_sensitive.append(c)
+
     return {
         "session_id": session_id,
         "filename": file.filename,
@@ -111,6 +135,8 @@ async def upload_csv(
         "categorical_cols": categorical_cols,
         "preview": preview,
         "preprocessing_report": report,
+        "suggested_sensitive": suggested_sensitive,
+        "blocked_from_sensitive": blocked_from_sensitive,
     }
 
 
@@ -181,6 +207,30 @@ async def load_sample_dataset(request: Request, dataset_id: str):
         "row_count": row_count,
     }
 
+    NEVER_SENSITIVE = [
+        "decile_score", "decile_score1", "score_text", "v_decile_score",
+        "risk_score", "predicted", "prediction", "output", "label",
+        "target", "outcome", "result", "index", "id", "fnlwgt",
+        "capital_gain", "capital_loss", "hours_per_week"
+    ]
+
+    DEMOGRAPHIC_KEYWORDS = [
+        "gender", "sex", "race", "ethnicity", "age", "religion",
+        "income", "nationality", "disability", "marital"
+    ]
+
+    suggested_sensitive = []
+    blocked_from_sensitive = []
+
+    for c in df.columns:
+        c_lower = c.lower()
+        if c_lower in NEVER_SENSITIVE or any(c_lower.endswith(sfx) for sfx in ["_score", "_id", "_index", "_output", "_predicted"]):
+            if any(k in c_lower for k in DEMOGRAPHIC_KEYWORDS):
+                blocked_from_sensitive.append(c)
+        else:
+            if any(k in c_lower for k in DEMOGRAPHIC_KEYWORDS):
+                suggested_sensitive.append(c)
+
     return {
         "session_id": session_id,
         "filename": dataset["filename"],
@@ -192,6 +242,8 @@ async def load_sample_dataset(request: Request, dataset_id: str):
         "categorical_cols": categorical_cols,
         "preview": preview,
         "preprocessing_report": report,
+        "suggested_sensitive": suggested_sensitive,
+        "blocked_from_sensitive": blocked_from_sensitive,
     }
 
 

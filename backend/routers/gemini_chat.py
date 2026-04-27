@@ -44,6 +44,22 @@ class GeminiChatRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GET /api/gemini-test
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/gemini-test", status_code=status.HTTP_200_OK)
+async def gemini_test() -> dict[str, Any]:
+    """
+    Diagnostic endpoint to test if Gemini API is working properly.
+    """
+    try:
+        from services.gemini_service import _model
+        response = _model.generate_content("Say hello in one word")
+        return {"status": "ok", "response": response.text.strip()}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # POST /api/detect-scenario
 # ─────────────────────────────────────────────────────────────────────────────
 

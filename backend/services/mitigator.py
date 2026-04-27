@@ -88,93 +88,121 @@ class BiasMitigator:
 
     # ── Reweighing ────────────────────────────────────────────────────────────
 
-    def reweigh(
-        self,
-        df_clean: pd.DataFrame,
-        feature_cols: list[str],
-    ) -> dict[str, Any]:
-        """
-        Compute sample weights based on the ratio of expected to actual
-        joint frequency of (group, label), then retrain a classifier.
-        """
-        n_total = len(df_clean)
-        weights = np.ones(n_total)
-        weights_summary = []
-        weight_map = {}
+    def reweigh(self, df, target_col, sensitive_attr):
+        import numpy as np
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import LabelEncoder
+        from sklearn.metrics import (accuracy_score, precision_score,
+                                     recall_score, f1_score)
 
-        groups = df_clean['__sens__'].unique()
-        labels = df_clean['__target__'].unique()
+        df_work = df.copy().dropna(subset=[target_col, sensitive_attr])
 
-        for g in groups:
-            for l in labels:
-                n_group = (df_clean['__sens__'] == g).sum()
-                n_label = (df_clean['__target__'] == l).sum()
-                n_group_label = ((df_clean['__sens__'] == g) & (df_clean['__target__'] == l)).sum()
+        # --- Encode target ---
+        le_t = LabelEncoder()
+        y_all = le_t.fit_transform(df_work[target_col].astype(str))
 
-                if n_group_label == 0:
-                    w = 1.0
-                else:
-                    w = (n_group / n_total) * (n_label / n_total) / (n_group_label / n_total)
-                
-                # Clip to prevent extreme values
-                w = max(0.1, min(10.0, w))
-                weight_map[(g, l)] = w
+        # --- Encode sensitive attr ---
+        le_s = LabelEncoder()
+        s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
 
-                weights_summary.append({
-                    "group": str(g),
-                    "label": str(l),
-                    "weight": round(w, 4)
-                })
+        # --- Numeric features only ---
+        feature_cols = [c for c in df_work.columns
+                        if c != target_col
+                        and c != sensitive_attr
+                        and df_work[c].dtype in ['int64','float64','int32','float32']]
+        if not feature_cols:
+            raise ValueError(f"No numeric features found. Cannot run reweighing.")
 
-        for i, (g, l) in enumerate(zip(df_clean['__sens__'].values, df_clean['__target__'].values)):
-            weights[i] = weight_map.get((g, l), 1.0)
+        X_all = df_work[feature_cols].fillna(0).values
+        n = len(df_work)
 
-        X = df_clean[feature_cols].values
-        y = df_clean['__target__'].values
-        s = df_clean['__sens__'].values
+        # --- Compute reweighing weights on FULL dataset ---
+        # Weight formula: P(group)*P(label) / P(group AND label)
+        weights = np.ones(n)
+        for g in np.unique(s_all):
+            for label in np.unique(y_all):
+                mask = (s_all == g) & (y_all == label)
+                n_gl = mask.sum()
+                if n_gl == 0:
+                    continue
+                p_g = (s_all == g).sum() / n
+                p_l = (y_all == label).sum() / n
+                p_gl = n_gl / n
+                w = (p_g * p_l) / p_gl
+                weights[mask] = w
 
-        X_train, X_test, y_train, y_test, s_train, s_test, w_train, _ = train_test_split(
-            X, y, s, weights, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y
+        # Clip weights to prevent instability
+        weights = np.clip(weights, 0.1, 10.0)
+
+        # --- Split AFTER computing weights so indices align ---
+        idx = np.arange(n)
+        idx_train, idx_test = train_test_split(
+            idx, test_size=0.3, random_state=42,
+            stratify=y_all
         )
 
-        # BEFORE metrics
-        model_before = LogisticRegression(max_iter=1000, random_state=self.RANDOM_STATE)
+        X_train = X_all[idx_train]
+        y_train = y_all[idx_train]
+        w_train = weights[idx_train]   # weights aligned with train split
+        X_test  = X_all[idx_test]
+        y_test  = y_all[idx_test]
+        s_test  = s_all[idx_test]
+
+        # --- BEFORE metrics (no weights) ---
+        model_before = LogisticRegression(max_iter=1000, random_state=42)
         model_before.fit(X_train, y_train)
         y_pred_before = model_before.predict(X_test)
-        before_metrics = {
-            "SPD": self._compute_spd(y_pred_before, s_test),
-            "DI": self._compute_di(y_pred_before, s_test),
-            "EOD": self._compute_eod(y_pred_before, y_test, s_test),
-            "AOD": self._compute_aod(y_pred_before, y_test, s_test),
-            "accuracy": round(accuracy_score(y_test, y_pred_before), 4),
+
+        before = {
+            "SPD":  round(float(self._compute_spd(y_pred_before, s_test)), 4),
+            "DI":   round(float(self._compute_di(y_pred_before, s_test)), 4),
+            "EOD":  self._compute_eod(y_pred_before, y_test, s_test),
+            "AOD":  self._compute_aod(y_pred_before, y_test, s_test),
+            "accuracy":  round(accuracy_score(y_test, y_pred_before), 4),
             "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
-            "recall": round(recall_score(y_test, y_pred_before, zero_division=0), 4),
-            "f1": round(f1_score(y_test, y_pred_before, zero_division=0), 4),
+            "recall":    round(recall_score(y_test, y_pred_before, zero_division=0), 4),
+            "f1":        round(f1_score(y_test, y_pred_before, zero_division=0), 4),
         }
 
-        # AFTER metrics
-        model_after = LogisticRegression(max_iter=1000, random_state=self.RANDOM_STATE)
+        # --- AFTER metrics (WITH weights on training) ---
+        model_after = LogisticRegression(max_iter=1000, random_state=42)
         model_after.fit(X_train, y_train, sample_weight=w_train)
         y_pred_after = model_after.predict(X_test)
-        after_metrics = {
-            "SPD": self._compute_spd(y_pred_after, s_test),
-            "DI": self._compute_di(y_pred_after, s_test),
-            "EOD": self._compute_eod(y_pred_after, y_test, s_test),
-            "AOD": self._compute_aod(y_pred_after, y_test, s_test),
-            "accuracy": round(accuracy_score(y_test, y_pred_after), 4),
+
+        after = {
+            "SPD":  round(float(self._compute_spd(y_pred_after, s_test)), 4),
+            "DI":   round(float(self._compute_di(y_pred_after, s_test)), 4),
+            "EOD":  self._compute_eod(y_pred_after, y_test, s_test),
+            "AOD":  self._compute_aod(y_pred_after, y_test, s_test),
+            "accuracy":  round(accuracy_score(y_test, y_pred_after), 4),
             "precision": round(precision_score(y_test, y_pred_after, zero_division=0), 4),
-            "recall": round(recall_score(y_test, y_pred_after, zero_division=0), 4),
-            "f1": round(f1_score(y_test, y_pred_after, zero_division=0), 4),
+            "recall":    round(recall_score(y_test, y_pred_after, zero_division=0), 4),
+            "f1":        round(f1_score(y_test, y_pred_after, zero_division=0), 4),
         }
 
-        eff = self.effects(before_metrics, after_metrics)
+        spd_b = abs(before["SPD"])
+        spd_a = abs(after["SPD"])
+        improvement_pct = round(((spd_b - spd_a) / max(spd_b, 1e-9)) * 100, 1)
+        accuracy_retained = round((after["accuracy"] / max(before["accuracy"], 1e-9)) * 100, 1)
 
-        return {
-            "before": before_metrics,
-            "after": after_metrics,
-            "effects": eff,
-            "weights_summary": weights_summary,
+        effects = {
+            "accuracy_delta":  round(after["accuracy"]  - before["accuracy"],  4),
+            "precision_delta": round(after["precision"] - before["precision"], 4),
+            "recall_delta":    round(after["recall"]    - before["recall"],    4),
+            "f1_delta":        round(after["f1"]        - before["f1"],        4),
+            "spd_delta":       round(after["SPD"]       - before["SPD"],       4),
+            "bias_reduction_pct":   improvement_pct,
+            "accuracy_retained_pct": accuracy_retained,
         }
+
+        return {"before": before, "after": after, "effects": effects,
+                "improvement_pct": improvement_pct,
+                "weights_summary": {
+                    "min": round(float(weights.min()), 3),
+                    "max": round(float(weights.max()), 3),
+                    "mean": round(float(weights.mean()), 3)
+                }}
 
     # ── Threshold Adjustment ──────────────────────────────────────────────────
 

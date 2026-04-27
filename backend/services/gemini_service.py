@@ -51,11 +51,20 @@ class GeminiService:
             response = _model.generate_content(prompt)
             raw = response.text.strip()
             return self._parse_json(raw)
-        except Exception:
+        except Exception as e:
+            error_str = str(e).lower()
+            if "quota" in error_str or "429" in error_str:
+                err_msg = "⚠️ Gemini API daily quota reached. The free tier allows 1,500 requests/day. Try again tomorrow or upgrade your API key at aistudio.google.com"
+            elif "api_key" in error_str or "403" in error_str:
+                err_msg = "⚠️ Gemini API key error. Check that GEMINI_API_KEY is set correctly in your backend .env file."
+            elif "invalid" in error_str:
+                err_msg = "⚠️ Invalid request to Gemini. The context may be too large. Try refreshing and starting a new analysis."
+            else:
+                err_msg = f"⚠️ Gemini error: {str(e)[:200]}. Check your backend terminal for full details."
             return {
                 "scenario": "other",
                 "confidence_pct": 50,
-                "reason": "Could not detect scenario automatically.",
+                "reason": err_msg,
             }
 
     # ── Bias explanation ──────────────────────────────────────────────────────
@@ -98,15 +107,16 @@ Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
         try:
             response = _model.generate_content(prompt)
             return response.text.strip()
-        except Exception:
-            spd_val = abs(spd)
-            gap_pct = f"{spd_val:.1%}" if isinstance(spd, (int, float)) else "measurable"
-            
-            p1 = f"We detected a {severity.upper()} severity bias associated with '{sensitive_attr}' in your {scenario} dataset. The analysis reveals a {gap_pct} disparity in positive outcomes across different demographic groups."
-            p2 = f"This gap is driven by underlying data patterns: {plain_reason} Machine learning models often pick up on these historical correlations or proxy features, leading to skewed predictions even if the sensitive attribute is removed."
-            p3 = f"If this model is deployed without remediation, it risks automating and scaling unfair treatment toward specific groups. Please review the recommended mitigation strategies below to safely reduce this bias."
-            
-            return f"{p1}\n\n{p2}\n\n{p3}"
+        except Exception as e:
+            error_str = str(e).lower()
+            if "quota" in error_str or "429" in error_str:
+                return "⚠️ Gemini API daily quota reached. The free tier allows 1,500 requests/day. Try again tomorrow or upgrade your API key at aistudio.google.com"
+            elif "api_key" in error_str or "403" in error_str:
+                return "⚠️ Gemini API key error. Check that GEMINI_API_KEY is set correctly in your backend .env file."
+            elif "invalid" in error_str:
+                return "⚠️ Invalid request to Gemini. The context may be too large. Try refreshing and starting a new analysis."
+            else:
+                return f"⚠️ Gemini error: {str(e)[:200]}. Check your backend terminal for full details."
 
     # ── Action Plan ───────────────────────────────────────────────────────────
 
@@ -182,58 +192,61 @@ Make each step actionable and specific to the findings above."""
 
     # ── Copilot chat ──────────────────────────────────────────────────────────
 
-    def chat(
-        self,
-        user_message: str,
-        history: list[dict[str, str]],
-        session_context: dict[str, Any],
-    ) -> str:
-        """
-        Multi-turn Bias Copilot conversation.
-
-        Parameters
-        ----------
-        user_message : str
-            The latest message from the user.
-        history : list[dict]
-            Previous turns as [{"role": "user"|"model", "content": str}, ...]
-        session_context : dict
-            Condensed analysis context injected as a system preamble.
-
-        Returns
-        -------
-        str — Gemini's reply.
-        """
-        system_preamble = (
-            "You are ByUs Bias Copilot, an expert AI assistant specialising in "
-            "algorithmic fairness, bias detection, and ML ethics. "
-            "Be concise, helpful, and explain fairness concepts in simple language. "
-            f"Current analysis context: {json.dumps(session_context, default=str)}"
-        )
-
-        # Build Gemini-format history
-        gemini_history: list[dict] = []
-
-        # Inject system preamble as first model turn to simulate system instruction
-        gemini_history.append(
-            {"role": "user", "parts": ["Please confirm you understand your role."]}
-        )
-        gemini_history.append(
-            {"role": "model", "parts": [system_preamble + " Understood — ready to assist."]}
-        )
-
-        for turn in history:
-            role = turn.get("role", "user")
-            content = turn.get("content", "")
-            if role in ("user", "model") and content:
-                gemini_history.append({"role": role, "parts": [content]})
+    def chat(self, user_message: str, history: list, session_context: dict) -> str:
+        import json
 
         try:
+            # Build a clean context summary (not full raw dict which can be huge)
+            ctx_summary = {
+                "scenario": session_context.get("scenario", "unknown"),
+                "audit_score": session_context.get("audit_score", "N/A"),
+                "overall_severity": session_context.get("overall_severity", "unknown"),
+                "sensitive_attrs": list(session_context.get("metrics_per_attr", {}).keys()),
+                "top_metrics": {
+                    attr: {
+                        "SPD": m.get("SPD"),
+                        "DI": m.get("DI"),
+                        "severity": m.get("severity")
+                    }
+                    for attr, m in session_context.get("metrics_per_attr", {}).items()
+                }
+            }
+
+            system_prompt = f"""You are ByUs AI Bias Copilot, an expert in AI fairness and ethics.
+You have analyzed a dataset with these findings:
+{json.dumps(ctx_summary, indent=2)}
+
+Rules:
+- Answer in plain English, no jargon
+- Be specific to the actual findings above
+- Keep responses under 150 words
+- If asked about metrics, refer to the actual numbers above
+- Be helpful and actionable"""
+
+            # Format history for Gemini
+            gemini_history = []
+            for msg in history[-6:]:  # last 6 messages only to save tokens
+                role = "user" if msg.get("role") == "user" else "model"
+                gemini_history.append({
+                    "role": role,
+                    "parts": [{"text": msg.get("content", "")}]
+                })
+
             chat_session = _model.start_chat(history=gemini_history)
-            response = chat_session.send_message(user_message)
+            full_message = f"{system_prompt}\n\nUser question: {user_message}"
+            response = chat_session.send_message(full_message)
             return response.text.strip()
-        except Exception:
-            return "I'm having trouble connecting. Please try again."
+
+        except Exception as e:
+            error_str = str(e).lower()
+            if "quota" in error_str or "429" in error_str:
+                return "⚠️ Gemini API daily quota reached. The free tier allows 1,500 requests/day. Try again tomorrow or upgrade your API key at aistudio.google.com"
+            elif "api_key" in error_str or "403" in error_str:
+                return "⚠️ Gemini API key error. Check that GEMINI_API_KEY is set correctly in your backend .env file."
+            elif "invalid" in error_str:
+                return "⚠️ Invalid request to Gemini. The context may be too large. Try refreshing and starting a new analysis."
+            else:
+                return f"⚠️ Gemini error: {str(e)[:200]}. Check your backend terminal for full details."
 
     # ── JSON parsing helper ───────────────────────────────────────────────────
 

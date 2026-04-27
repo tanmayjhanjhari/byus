@@ -7,12 +7,6 @@ import client from "../../api/client";
 import useAnalysisStore from "../../store/analysisStore";
 import ValidationCard from "./ValidationCard";
 
-// Keywords that trigger auto-detection of sensitive attributes
-const SENSITIVE_KEYWORDS = [
-  "gender", "sex", "race", "ethnicity", "age", "religion",
-  "income", "nationality", "disability", "marital",
-];
-
 const DTYPE_COLORS = {
   int64:   { label: "numeric",     cls: "bg-accent/20 text-accent" },
   float64: { label: "numeric",     cls: "bg-accent/20 text-accent" },
@@ -30,11 +24,6 @@ function dtypeChip(dtype) {
       {entry.label}
     </span>
   );
-}
-
-function isAutoDetected(col) {
-  const lower = col.toLowerCase();
-  return SENSITIVE_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
 // ── Scenario chip ──────────────────────────────────────────────────────────────
@@ -68,7 +57,7 @@ export default function ColumnSelector() {
       const uciSensitive = ["sex", "race"].filter(c => columns.includes(c));
       if (uciSensitive.length > 0) return uciSensitive;
     }
-    return columns.filter(isAutoDetected);
+    return store.suggestedSensitive || [];
   });
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioData,    setScenarioData]    = useState(null);
@@ -175,18 +164,24 @@ export default function ColumnSelector() {
         <p className="section-label">Sensitive Attributes</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
           {sensitiveOptions.map((col) => {
-            const checked    = sensitiveAttrs.includes(col);
-            const autoDetect = isAutoDetected(col);
+            const checked = sensitiveAttrs.includes(col);
+            let highlight = "";
+            if (store.suggestedSensitive?.includes(col)) {
+              highlight = "bg-warning/10 border-warning/40 text-warning-light";
+            } else if (store.blockedSensitive?.includes(col)) {
+              highlight = "bg-surface border-white/10 text-textSecondary opacity-70";
+            } else {
+              highlight = checked 
+                ? "bg-accent/10 border-accent/40" 
+                : "bg-surface/50 border-white/[0.06] hover:border-white/20";
+            }
+
             return (
               <motion.label
                 key={col}
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-colors duration-150
-                  ${checked
-                    ? "bg-accent/10 border-accent/40"
-                    : "bg-surface/50 border-white/[0.06] hover:border-white/20"
-                  }`}
+                className={`flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition-colors duration-150 ${highlight}`}
               >
                 <input
                   type="checkbox"
@@ -202,9 +197,9 @@ export default function ColumnSelector() {
                   <p className="text-xs font-medium text-textPrimary truncate">{col}</p>
                   <div className="flex items-center gap-1 mt-1 flex-wrap">
                     {dtypeChip(dtypes[col])}
-                    {autoDetect && (
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-success/20 text-success">
-                        auto
+                    {store.suggestedSensitive?.includes(col) && (
+                      <span className="text-[10px] flex items-center gap-0.5 text-warning-light bg-warning/10 px-1.5 py-0.5 rounded-full font-medium">
+                        <Sparkles size={10} /> suggested
                       </span>
                     )}
                   </div>

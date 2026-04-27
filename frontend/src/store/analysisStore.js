@@ -14,6 +14,8 @@ const useAnalysisStore = create((set, get) => ({
   rowCount: 0,
   filename: "",
   preprocessingReport: null,
+  suggestedSensitive: [],
+  blockedSensitive: [],
 
   // ── Configuration ─────────────────────────────────────────────────────────────
   targetCol: "",
@@ -61,6 +63,8 @@ const useAnalysisStore = create((set, get) => ({
       rowCount:       meta.row_count      ?? 0,
       filename:       meta.filename       ?? "",
       preprocessingReport: meta.preprocessing_report ?? null,
+      suggestedSensitive:  meta.suggested_sensitive  ?? [],
+      blockedSensitive:    meta.blocked_from_sensitive ?? [],
     }),
 
   setModel: (modelId) => set({ modelId }),
