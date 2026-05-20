@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Mail, Lock, User, Loader2, Scan } from "lucide-react";
 import { register, login } from "../../api/auth";
@@ -71,7 +72,7 @@ export default function AuthModal({ isOpen, onClose }) {
     }
   };
 
-  return (
+  return createPortal(
     <AnimatePresence>
       {isOpen && (
         <>
@@ -87,10 +88,10 @@ export default function AuthModal({ isOpen, onClose }) {
               left: 0,
               right: 0,
               bottom: 0,
-              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+              backgroundColor: 'rgba(0, 0, 0, 0.75)',
               backdropFilter: 'blur(8px)',
               WebkitBackdropFilter: 'blur(8px)',
-              zIndex: 9998,
+              zIndex: 99998,
             }}
           />
 
@@ -105,7 +106,7 @@ export default function AuthModal({ isOpen, onClose }) {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              zIndex: 9999,
+              zIndex: 99999,
               padding: '1rem',
             }}
           >
@@ -118,13 +119,14 @@ export default function AuthModal({ isOpen, onClose }) {
               style={{
                 backgroundColor: '#1E293B',
                 borderRadius: '1rem',
-                padding: '2rem',
+                padding: '2.5rem 2rem 2rem 2rem',
                 width: '100%',
                 maxWidth: '440px',
-                boxShadow: '0 25px 60px rgba(0,0,0,0.5)',
-                border: '1px solid rgba(20, 184, 166, 0.2)',
+                boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
+                border: '1px solid rgba(20, 184, 166, 0.25)',
                 maxHeight: '90vh',
                 overflowY: 'auto',
+                position: 'relative',
               }}
             >
               {/* Close button */}
@@ -132,7 +134,7 @@ export default function AuthModal({ isOpen, onClose }) {
                 onClick={onClose}
                 className="absolute top-4 right-4 text-textSecondary hover:text-textPrimary transition-colors"
                 type="button"
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
               >
                 <X size={20} />
               </button>
@@ -258,7 +260,7 @@ export default function AuthModal({ isOpen, onClose }) {
                   onClick={toggleMode}
                   className="text-textSecondary hover:text-accent transition-colors"
                   type="button"
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: 'pointer', background: 'none', border: 'none' }}
                 >
                   {mode === "login" ? (
                     <>
@@ -275,6 +277,7 @@ export default function AuthModal({ isOpen, onClose }) {
           </div>
         </>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 }
