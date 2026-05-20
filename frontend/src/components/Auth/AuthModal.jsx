@@ -75,34 +75,64 @@ export default function AuthModal({ isOpen, onClose }) {
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
+          {/* BACKDROP — covers full screen with blur */}
           <motion.div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.7)',
+              backdropFilter: 'blur(8px)',
+              WebkitBackdropFilter: 'blur(8px)',
+              zIndex: 9998,
+            }}
           />
-          {/* Modal card */}
-          <motion.div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+
+          {/* MODAL WRAPPER — centers the card */}
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999,
+              padding: '1rem',
+            }}
           >
             <motion.div
-              className="relative w-full max-w-md bg-[#1E293B] rounded-2xl p-8 shadow-2xl border border-white/[0.08] overflow-hidden"
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 20 }}
-              transition={{ type: "spring", duration: 0.3 }}
+              initial={{ opacity: 0, scale: 0.95, y: 24 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 24 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
               onClick={(e) => e.stopPropagation()}
+              style={{
+                backgroundColor: '#1E293B',
+                borderRadius: '1rem',
+                padding: '2rem',
+                width: '100%',
+                maxWidth: '440px',
+                boxShadow: '0 25px 60px rgba(0,0,0,0.5)',
+                border: '1px solid rgba(20, 184, 166, 0.2)',
+                maxHeight: '90vh',
+                overflowY: 'auto',
+              }}
             >
               {/* Close button */}
               <button
                 onClick={onClose}
                 className="absolute top-4 right-4 text-textSecondary hover:text-textPrimary transition-colors"
                 type="button"
+                style={{ cursor: 'pointer' }}
               >
                 <X size={20} />
               </button>
@@ -210,7 +240,7 @@ export default function AuthModal({ isOpen, onClose }) {
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full bg-accent hover:bg-accentLight text-primary font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all mt-6 cursor-default disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full bg-accent hover:bg-accentLight text-primary font-semibold py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all mt-6 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? (
                     <Loader2 size={16} className="animate-spin" />
@@ -228,6 +258,7 @@ export default function AuthModal({ isOpen, onClose }) {
                   onClick={toggleMode}
                   className="text-textSecondary hover:text-accent transition-colors"
                   type="button"
+                  style={{ cursor: 'pointer' }}
                 >
                   {mode === "login" ? (
                     <>
@@ -241,7 +272,7 @@ export default function AuthModal({ isOpen, onClose }) {
                 </button>
               </div>
             </motion.div>
-          </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>
