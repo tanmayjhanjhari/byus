@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { Check, Scan, BrainCircuit } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { motion, AnimatePresence } from "framer-motion";
+import { Check, Scan, BrainCircuit, LogOut, ChevronDown, LayoutDashboard } from "lucide-react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import useAnalysisStore from "../../store/analysisStore";
+import useAuthStore from "../../store/authStore";
+import AuthModal from "../Auth/AuthModal";
 import client from "../../api/client";
+import toast from "react-hot-toast";
 
 const STEPS = [
   { label: "Upload",     path: "/",            step: 0 },
@@ -40,7 +43,7 @@ const StepDot = ({ label, stepIndex, currentStep }) => {
         )}
       </motion.div>
       <span
-        className={`text-sm font-medium hidden sm:inline transition-colors duration-200 ${
+        className={`text-sm font-medium hidden md:inline transition-colors duration-200 ${
           isActive
             ? "text-accent"
             : isCompleted
@@ -55,7 +58,7 @@ const StepDot = ({ label, stepIndex, currentStep }) => {
 };
 
 const StepConnector = ({ completed }) => (
-  <div className="flex-1 mx-2 h-px max-w-[48px]">
+  <div className="flex-1 mx-2 h-px max-w-[32px] hidden md:block">
     <motion.div
       animate={{ backgroundColor: completed ? "#22C55E" : "#334155" }}
       transition={{ duration: 0.3 }}
@@ -85,10 +88,8 @@ function LearningPill() {
     }
   };
 
-  // Fetch on mount
   useEffect(() => { fetchStats(); }, []);
 
-  // Refetch on navigation to /results
   useEffect(() => {
     if (location.pathname === "/results") fetchStats();
   }, [location.pathname]);
@@ -104,8 +105,11 @@ function LearningPill() {
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-accent/15 border border-accent/25 cursor-default"
       >
         <BrainCircuit size={14} className="text-accent flex-shrink-0" />
-        <span className="text-xs font-semibold text-accent whitespace-nowrap">
+        <span className="text-xs font-semibold text-accent whitespace-nowrap hidden sm:inline">
           {stats.total_examples} cases learned
+        </span>
+        <span className="text-xs font-semibold text-accent whitespace-nowrap sm:hidden">
+          {stats.total_examples} cases
         </span>
       </motion.div>
 
@@ -130,10 +134,33 @@ function LearningPill() {
 
 export default function AppShell() {
   const currentStep = useAnalysisStore((s) => s.step);
+  const { user, isLoggedIn, logout } = useAuthStore();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef(null);
+  const navigate = useNavigate();
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleSignOut = () => {
+    logout();
+    setShowDropdown(false);
+    toast.success("Signed out successfully.");
+    navigate("/");
+  };
 
   return (
     <header className="sticky top-0 z-50 bg-primary/95 backdrop-blur-md border-b border-white/[0.06]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between h-16">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center justify-between h-16 gap-4">
         {/* Logo */}
         <Link to="/" className="flex items-center gap-2 group flex-shrink-0">
           <div className="w-8 h-8 rounded-lg bg-accent/20 flex items-center justify-center group-hover:bg-accent/30 transition-colors">
@@ -160,9 +187,70 @@ export default function AppShell() {
           ))}
         </nav>
 
-        {/* Learning pill */}
-        <LearningPill />
+        {/* Right side container */}
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <LearningPill />
+
+          {isLoggedIn ? (
+            <div className="relative" ref={dropdownRef}>
+              <button
+                onClick={() => setShowDropdown(!showDropdown)}
+                className="flex items-center gap-2 px-2 py-1 rounded-xl hover:bg-white/[0.04] transition-all cursor-default"
+              >
+                <div className="w-7 h-7 rounded-full bg-accent text-primary flex items-center justify-center font-bold text-sm uppercase">
+                  {user?.name?.charAt(0) || "U"}
+                </div>
+                <span className="text-sm font-medium text-textPrimary max-w-[80px] truncate hidden md:inline">
+                  {user?.name}
+                </span>
+                <ChevronDown size={14} className="text-textSecondary" />
+              </button>
+
+              <AnimatePresence>
+                {showDropdown && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 mt-2 w-48 bg-surface border border-white/10 rounded-xl py-1 shadow-2xl z-50 overflow-hidden"
+                  >
+                    <div className="px-4 py-2 border-b border-white/[0.06] md:hidden">
+                      <p className="text-xs font-semibold text-textPrimary truncate">{user?.name}</p>
+                      <p className="text-[10px] text-textSecondary truncate">{user?.email}</p>
+                    </div>
+                    <Link
+                      to="/dashboard"
+                      onClick={() => setShowDropdown(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-xs text-textSecondary hover:text-textPrimary hover:bg-white/[0.04] transition-colors"
+                    >
+                      <LayoutDashboard size={14} />
+                      My Reports
+                    </Link>
+                    <button
+                      onClick={handleSignOut}
+                      className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-danger hover:bg-danger/10 transition-colors cursor-default"
+                    >
+                      <LogOut size={14} />
+                      Sign Out
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="px-3.5 py-1.5 border border-accent/40 text-accent hover:border-accent hover:bg-accent/5 font-semibold text-xs rounded-xl transition-all cursor-default"
+            >
+              Sign In
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Auth Modal */}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </header>
   );
 }
