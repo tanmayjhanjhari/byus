@@ -78,12 +78,17 @@ async def mitigate(
             fairlearn_result = {"error": str(exc), "fallback_used": True}
 
     # ── Run BiasMitigator ─────────────────────────────────────────────────────
+    # Extract predicted_cause from prior analyze() auto-learning
+    pattern_preds   = session.get("pattern_predictions", {})
+    predicted_cause = pattern_preds.get(body.sensitive_attr, {}).get("predicted_cause")
+
     # BiasMitigator works on any tabular data regardless of fallback flag
     try:
         mitigation_results = mitigator.run_both(
             df=df,
             target_col=body.target_col,
             sensitive_attr=body.sensitive_attr,
+            predicted_cause=predicted_cause,
         )
     except Exception as exc:
         raise HTTPException(
@@ -101,6 +106,8 @@ async def mitigate(
         "reweigh": _serialise(mitigation_results["reweigh"]),
         "threshold": _serialise(mitigation_results["threshold"]),
         "winner": mitigation_results["winner"],
+        "winner_reason": mitigation_results.get("winner_reason"),
+        "predicted_cause_used": mitigation_results.get("predicted_cause_used"),
         "fairlearn_used": fallback_needed,
     }
 

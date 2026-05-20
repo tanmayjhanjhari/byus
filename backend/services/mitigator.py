@@ -39,6 +39,7 @@ class BiasMitigator:
         df: pd.DataFrame,
         target_col: str,
         sensitive_attr: str,
+        predicted_cause: str = None,
     ) -> dict[str, Any]:
         """
         Run both mitigation strategies and return a unified comparison.
@@ -77,8 +78,76 @@ class BiasMitigator:
         rew = self.reweigh(df, target_col, sensitive_attr)
         thr = self.threshold_adjust(df_clean, feature_cols)
 
-        # Winner: best SPD reduction while keeping accuracy drop < 3%
-        winner = self._pick_winner(rew, thr)
+        # ── Winner selection (cause-aware) ─────────────────────────────────────────
+        spd_r = abs(rew["after"].get("SPD", 999) or 999)
+        spd_t = abs(thr["after"].get("SPD", 999) or 999)
+        red_r = rew["effects"].get("bias_reduction_pct", 0)
+        red_t = thr["effects"].get("bias_reduction_pct", 0)
+        acc_r = rew["effects"].get("accuracy_retained_pct", 0)
+        acc_t = thr["effects"].get("accuracy_retained_pct", 0)
+
+        # Step 1: cause-based preference
+        cause_winner = None
+        cause_reason = None
+
+        if predicted_cause == "proxy":
+            cause_winner = "reweigh"
+            cause_reason = (
+                "Reweighing is preferred for proxy discrimination. "
+                "It rebalances training data weights so the proxy feature "
+                "can no longer unfairly influence group outcomes."
+            )
+        elif predicted_cause == "underrepresentation":
+            cause_winner = "threshold"
+            cause_reason = (
+                "Threshold Adjustment is preferred for underrepresentation. "
+                "It corrects the decision boundary per group directly, "
+                "compensating for the lack of minority training examples."
+            )
+        elif predicted_cause == "historical_skew":
+            cause_winner = "reweigh"
+            cause_reason = (
+                "Reweighing is preferred for historical bias. "
+                "It down-weights the historically over-represented patterns "
+                "so the model stops reproducing past discrimination."
+            )
+
+        # Step 2: validate cause preference against actual results
+        # Override if the cause-preferred technique achieved < 5% bias reduction
+        if cause_winner == "reweigh" and red_r < 5:
+            cause_winner = "threshold"
+            cause_reason = (
+                "Threshold Adjustment is recommended because reweighing "
+                "achieved less than 5% bias reduction on this dataset, "
+                "suggesting the bias is in the decision boundary, not the weights."
+            )
+        elif cause_winner == "threshold" and red_t < 5:
+            cause_winner = "reweigh"
+            cause_reason = (
+                "Reweighing is recommended because threshold adjustment "
+                "achieved less than 5% bias reduction on this dataset."
+            )
+
+        # Step 3: pure metric fallback if no cause available
+        if cause_winner is None:
+            if red_r > red_t and acc_r >= 85:
+                cause_winner = "reweigh"
+                cause_reason = (
+                    f"Reweighing achieved {red_r:.0f}% bias reduction "
+                    f"with {acc_r:.0f}% accuracy retained."
+                )
+            elif red_t > red_r and acc_t >= 85:
+                cause_winner = "threshold"
+                cause_reason = (
+                    f"Threshold Adjustment achieved {red_t:.0f}% bias reduction "
+                    f"with {acc_t:.0f}% accuracy retained."
+                )
+            else:
+                cause_winner = "reweigh" if spd_r <= spd_t else "threshold"
+                cause_reason = "Selected based on lowest resulting SPD value."
+
+        winner        = cause_winner
+        winner_reason = cause_reason
 
         # Generate explanations
         reweigh_explanation = self.generate_mitigation_explanation(
@@ -122,6 +191,7 @@ class BiasMitigator:
             "threshold": thr,
             "winner": winner,
             "winner_reason": winner_reason,
+            "predicted_cause_used": predicted_cause,
             "model_info": {
                 "type": "GradientBoostingClassifier",
                 "note": "Internal simulation model for mitigation demonstration. Bias metrics SPD/DI/EOD/AOD are mathematical formulas independent of this model."
