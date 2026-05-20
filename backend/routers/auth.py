@@ -4,8 +4,8 @@ from pydantic import BaseModel, EmailStr
 from datetime import datetime
 from bson import ObjectId
 from typing import Optional
-from ..database import get_db
-from ..services.auth_service import (
+from database import get_db
+from services.auth_service import (
     hash_password, verify_password,
     create_token, decode_token, serialize_doc
 )
@@ -55,13 +55,14 @@ async def require_user(
 @router.post("/register")
 async def register(req: RegisterRequest):
     db = get_db()
-    existing = await db.users.find_one({"email": req.email.lower()})
+    email_clean = req.email.lower().strip()
+    existing = await db.users.find_one({"email": email_clean})
     if existing:
         raise HTTPException(status_code=400,
                             detail="An account with this email already exists.")
     user_doc = {
         "name": req.name.strip(),
-        "email": req.email.lower().strip(),
+        "email": email_clean,
         "password": hash_password(req.password),
         "created_at": datetime.utcnow(),
         "total_analyses": 0,
@@ -69,25 +70,26 @@ async def register(req: RegisterRequest):
     }
     result = await db.users.insert_one(user_doc)
     user_id = str(result.inserted_id)
-    token = create_token(user_id, req.email.lower())
+    token = create_token(user_id, email_clean)
     return {
         "token": token,
         "user": {
             "id": user_id,
-            "name": req.name,
-            "email": req.email.lower(),
+            "name": req.name.strip(),
+            "email": email_clean,
         }
     }
 
 @router.post("/login")
 async def login(req: LoginRequest):
     db = get_db()
-    user = await db.users.find_one({"email": req.email.lower()})
+    email_clean = req.email.lower().strip()
+    user = await db.users.find_one({"email": email_clean})
     if not user or not verify_password(req.password, user["password"]):
         raise HTTPException(status_code=401,
                             detail="Incorrect email or password.")
     user_id = str(user["_id"])
-    token = create_token(user_id, req.email.lower())
+    token = create_token(user_id, email_clean)
     return {
         "token": token,
         "user": {
