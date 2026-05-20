@@ -5,7 +5,7 @@ from passlib.context import CryptContext
 from bson import ObjectId
 import os
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 JWT_SECRET = os.getenv("JWT_SECRET", "byus_default_secret")
 JWT_ALGORITHM = "HS256"
