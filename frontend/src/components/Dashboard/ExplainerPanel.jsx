@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, ChevronDown, AlertTriangle, Info, AlertCircle, CheckCircle } from "lucide-react";
+import { Sparkles, ChevronDown, AlertTriangle, Info, AlertCircle, CheckCircle, BrainCircuit } from "lucide-react";
 import useAnalysisStore from "../../store/analysisStore";
 
 // BrainIcon helper
@@ -80,13 +80,92 @@ export default function ExplainerPanel({ attrName }) {
     imbalance_explanation,
     plain_reason,
     di_explanation,
-    di_val
+    pattern_prediction,
   } = explanation;
 
   const isDiFail = explanation.di_explanation?.includes("FAILS") || explanation.di_explanation?.includes("severely below");
 
+  // ── Severity border colour ──────────────────────────────────────────────────
+  const severityBorder = {
+    high:   "border-l-red-500",
+    medium: "border-l-amber-400",
+    low:    "border-l-green-500",
+    none:   "border-l-slate-600",
+  };
+  const causeBadge = {
+    proxy:              "bg-red-500/20 text-red-400 border-red-500/30",
+    underrepresentation:"bg-amber-400/20 text-amber-400 border-amber-400/30",
+    historical_skew:    "bg-orange-500/20 text-orange-400 border-orange-500/30",
+    none:               "bg-green-500/20 text-green-400 border-green-500/30",
+  };
+
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
+
+      {/* ── Pattern Prediction Card ─────────────────────────────────────────── */}
+      {pattern_prediction && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className={`glass-card border-l-4 border border-white/[0.06] rounded-xl overflow-hidden p-4
+            ${severityBorder[pattern_prediction.predicted_severity] || "border-l-slate-600"}`}
+        >
+          {/* Top row */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <BrainCircuit size={18} className="text-accent" />
+              <span className="text-sm font-semibold text-textPrimary uppercase tracking-wider">Root Cause Analysis</span>
+            </div>
+            <span className={`text-xs font-bold px-2.5 py-1 rounded-full border uppercase tracking-wider
+              ${causeBadge[pattern_prediction.predicted_cause] || "bg-slate-500/20 text-slate-400 border-slate-500/30"}`}>
+              {pattern_prediction.predicted_cause?.replace("_", " ")}
+            </span>
+          </div>
+
+          {/* Cause label */}
+          <p className="text-sm text-textPrimary leading-relaxed mb-3">
+            {pattern_prediction.cause_label}
+          </p>
+
+          {/* Also possible */}
+          {pattern_prediction.top_causes?.[1]?.probability > 15 && (
+            <p className="text-xs text-textSecondary mb-3">
+              Also possible: <span className="text-textPrimary">{pattern_prediction.top_causes[1].cause?.replace("_", " ")}</span> ({pattern_prediction.top_causes[1].probability}%)
+            </p>
+          )}
+
+          {/* Confidence bar */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] text-textSecondary">Confidence</span>
+                <span className="text-[11px] font-semibold text-accent">{pattern_prediction.confidence_pct}%</span>
+              </div>
+              <div className="h-1.5 w-full bg-surface rounded-full overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${pattern_prediction.confidence_pct}%` }}
+                  transition={{ duration: 0.8, ease: "easeOut" }}
+                  className="h-full bg-accent rounded-full"
+                />
+              </div>
+            </div>
+            <span className="text-[11px] text-textSecondary whitespace-nowrap">
+              Based on {pattern_prediction.training_examples} cases
+            </span>
+          </div>
+
+          {/* Rule-based note */}
+          {!pattern_prediction.learned && (
+            <div className="mt-3 flex items-center gap-2 text-[11px] text-amber-400 bg-amber-400/10 border border-amber-400/20 rounded-lg px-3 py-2">
+              <AlertTriangle size={12} className="flex-shrink-0" />
+              Rule-based analysis (more uploads improve accuracy)
+            </div>
+          )}
+        </motion.div>
+      )}
+
       {/* SECTION 1 */}
       <CollapsibleSection title="What does this SPD mean?" defaultOpen={true} icon={Info}>
         <p className="text-textPrimary">{spd_explanation}</p>
