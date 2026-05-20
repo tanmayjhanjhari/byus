@@ -188,10 +188,80 @@ async def analyze(
         "model_used": model_used,
     }
 
-    return response
+    # ── 7. Auto-learning + pattern predictions ───────────────────────────────
+    import threading
+    from services.bias_pattern_model import get_bias_pattern_classifier
+
+    results = response  # alias for clarity in the block below
+
+    try:
+        classifier = get_bias_pattern_classifier()
+        dataset_name = session.get("filename", "unknown")
+        scenario     = session.get("scenario", "other")
+        metrics_per_attr = bias_results.get("metrics_per_attr", {})
+
+        pattern_predictions = {}
+
+        for attr, m in metrics_per_attr.items():
+            spd         = abs(m.get("SPD", 0) or 0)
+            di          = m.get("DI", 1.0) or 1.0
+            proxies     = m.get("proxy_features", [])
+            top_proxy_r = proxies[0].get("correlation", 0.0) if proxies else 0.0
+            proxy_count = sum(1 for p in proxies if p.get("correlation", 0) > 0.2)
+            group_stats = m.get("group_stats", {})
+            rates       = [g.get("positive_rate", 0) for g in group_stats.values()]
+            rate_var    = float(np.std(rates)) if len(rates) > 1 else 0.0
+            counts      = [g.get("count", 1) for g in group_stats.values()]
+            group_ratio = (min(counts) / max(counts)) if counts and max(counts) > 0 else 1.0
+
+            # Get prediction for this attribute
+            pred = classifier.predict(
+                spd, di, top_proxy_r, group_ratio,
+                proxy_count, rate_var, scenario
+            )
+            pattern_predictions[attr] = pred
+
+            # Auto-learn in background — never blocks the API response
+            t = threading.Thread(
+                target=classifier.add_training_example,
+                args=(spd, di, top_proxy_r, group_ratio,
+                      proxy_count, rate_var, scenario,
+                      dataset_name, attr),
+                daemon=True
+            )
+            t.start()
+
+        # Store predictions in session so mitigator can use them
+        session["pattern_predictions"] = pattern_predictions
+
+        # Add to API response
+        results["pattern_predictions"] = pattern_predictions
+
+    except Exception as e:
+        # Auto-learning failure must NEVER break the analysis response
+        print(f"[AutoLearn] Silent failure: {e}")
+        results["pattern_predictions"] = {}
+
+    return results
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/learning-stats
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/learning-stats", status_code=status.HTTP_200_OK)
+async def learning_stats() -> dict:
+    """
+    Return statistics about the BiasPatternClassifier's training data.
+    Shows how many examples have been learned from real uploads vs seed data.
+    """
+    from services.bias_pattern_model import get_bias_pattern_classifier
+    classifier = get_bias_pattern_classifier()
+    return classifier.get_stats()
+
+
 
 def _find_model(
     sessions: dict,
