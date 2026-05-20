@@ -17,3 +17,7 @@ xlrd
 pyarrow
 fastparquet
 requests
+motor
+pymongo
+python-jose[cryptography]
+passlib[bcrypt]

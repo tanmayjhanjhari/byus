@@ -11,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from routers import upload, analyze, mitigate, report, gemini_chat, explain
+from database import connect_db, disconnect_db
+from routers import upload, analyze, mitigate, report, gemini_chat, explain, auth, reports as reports_router
 
 # Load environment variables
 load_dotenv()
@@ -21,8 +22,10 @@ load_dotenv()
 async def lifespan(app: FastAPI):
     # Initialise in-memory session store on startup
     app.state.sessions = {}
+    await connect_db()
+    os.makedirs("data", exist_ok=True)
     yield
-    # Nothing to clean up on shutdown for in-memory store
+    await disconnect_db()
 
 
 async def global_exception_handler(request: Request, exc: Exception):
@@ -57,10 +60,15 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, global_exception_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 
+    # Allow frontend domains (or standard origins) with credentials
+    origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=origins,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -72,6 +80,8 @@ def create_app() -> FastAPI:
     app.include_router(report.router, prefix="/api")
     app.include_router(gemini_chat.router, prefix="/api")
     app.include_router(explain.router, prefix="/api")
+    app.include_router(auth.router)
+    app.include_router(reports_router.router)
 
     # ── Health check ─────────────────────────────────────────────────────────
     @app.get("/api/health", tags=["Health"])
