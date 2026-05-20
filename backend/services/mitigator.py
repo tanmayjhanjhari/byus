@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -122,6 +122,10 @@ class BiasMitigator:
             "threshold": thr,
             "winner": winner,
             "winner_reason": winner_reason,
+            "model_info": {
+                "type": "GradientBoostingClassifier",
+                "note": "Internal simulation model for mitigation demonstration. Bias metrics SPD/DI/EOD/AOD are mathematical formulas independent of this model."
+            },
         }
 
     def generate_mitigation_explanation(self, before: dict, after: dict,
@@ -233,7 +237,6 @@ class BiasMitigator:
 
     def reweigh(self, df, target_col, sensitive_attr):
         import numpy as np
-        from sklearn.linear_model import LogisticRegression
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import LabelEncoder
         from sklearn.metrics import (accuracy_score, precision_score,
@@ -249,15 +252,8 @@ class BiasMitigator:
         le_s = LabelEncoder()
         s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
 
-        # --- Numeric features only ---
-        feature_cols = [c for c in df_work.columns
-                        if c != target_col
-                        and c != sensitive_attr
-                        and df_work[c].dtype in ['int64','float64','int32','float32']]
-        if not feature_cols:
-            raise ValueError(f"No numeric features found. Cannot run reweighing.")
-
-        X_all = df_work[feature_cols].fillna(0).values
+        # --- Encode ALL features (numeric + categorical) ---
+        X_all, feature_cols = self._prepare_features(df_work, target_col, sensitive_attr)
         n = len(df_work)
 
         # --- Compute reweighing weights on FULL dataset ---
@@ -293,7 +289,13 @@ class BiasMitigator:
         s_test  = s_all[idx_test]
 
         # --- BEFORE metrics (no weights) ---
-        model_before = LogisticRegression(max_iter=1000, random_state=42)
+        model_before = GradientBoostingClassifier(
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=42
+        )
         model_before.fit(X_train, y_train)
         y_pred_before = model_before.predict(X_test)
 
@@ -309,7 +311,13 @@ class BiasMitigator:
         }
 
         # --- AFTER metrics (WITH weights on training) ---
-        model_after = LogisticRegression(max_iter=1000, random_state=42)
+        model_after = GradientBoostingClassifier(
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=42
+        )
         model_after.fit(X_train, y_train, sample_weight=w_train)
         y_pred_after = model_after.predict(X_test)
 
@@ -352,16 +360,33 @@ class BiasMitigator:
     def threshold_adjust(self, df_clean: pd.DataFrame, feature_cols: list[str]):
         import numpy as np
 
-        X = df_clean[feature_cols].values
-        y = df_clean['__target__'].values
-        s = df_clean['__sens__'].values
+        # Rebuild target and sensitive arrays from df_clean special columns
+        target_col = '__target__'
+        sensitive_attr = '__sens__'
+        y_all = df_clean[target_col].values
+        s_all = df_clean[sensitive_attr].values
 
-        # Fixed seed for reproducibility
-        X_train, X_test, y_train, y_test, s_train, s_test = train_test_split(
-            X, y, s, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y
+        # Encode ALL features using the shared helper
+        X_all, _ = self._prepare_features(df_clean, target_col, sensitive_attr)
+
+        idx = np.arange(len(df_clean))
+        idx_train, idx_test = train_test_split(
+            idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y_all
         )
 
-        model = LogisticRegression(max_iter=1000, random_state=42)
+        X_train = X_all[idx_train]
+        X_test  = X_all[idx_test]
+        y_train = y_all[idx_train]
+        y_test  = y_all[idx_test]
+        s_test  = s_all[idx_test]
+
+        model = GradientBoostingClassifier(
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=42
+        )
         model.fit(X_train, y_train)
 
         # Get probabilities on test set
@@ -508,25 +533,47 @@ class BiasMitigator:
         sample_weight: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """
-        Stratified 70/30 split → train LogisticRegression (with optional weights) →
+        Stratified 70/30 split → train GradientBoostingClassifier (with optional weights) →
         compute fairness + performance metrics on the held-out test set.
         """
-        X, y, sensitive = self._prepare_features(df, target_col, sensitive_attr)
+        from sklearn.preprocessing import LabelEncoder
+        df_work = df.dropna(subset=[target_col, sensitive_attr]).copy()
 
-        X_train, X_test, y_train, y_test, s_train, s_test = train_test_split(
-            X, y, sensitive,
+        le_t = LabelEncoder()
+        y_all = le_t.fit_transform(df_work[target_col].astype(str))
+
+        le_s = LabelEncoder()
+        s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
+
+        X_all, _ = self._prepare_features(df_work, target_col, sensitive_attr)
+
+        idx = np.arange(len(df_work))
+        idx_train, idx_test = train_test_split(
+            idx,
             test_size=self.TEST_SIZE,
             random_state=self.RANDOM_STATE,
-            stratify=y,
+            stratify=y_all,
         )
 
-        train_weights = sample_weight[: len(X_train)] if sample_weight is not None else None
+        X_train = X_all[idx_train]
+        X_test  = X_all[idx_test]
+        y_train = y_all[idx_train]
+        y_test  = y_all[idx_test]
+        s_test  = s_all[idx_test]
 
-        clf = LogisticRegression(max_iter=1000, solver="lbfgs", random_state=self.RANDOM_STATE)
+        train_weights = sample_weight[idx_train] if sample_weight is not None else None
+
+        clf = GradientBoostingClassifier(
+            n_estimators=200,
+            max_depth=4,
+            learning_rate=0.05,
+            subsample=0.8,
+            random_state=self.RANDOM_STATE
+        )
         clf.fit(X_train, y_train, sample_weight=train_weights)
         y_pred = clf.predict(X_test)
 
-        return self._metrics_from_arrays(y_test, y_pred, s_test, df[sensitive_attr])
+        return self._metrics_from_arrays(y_test, y_pred, s_test, df_work[sensitive_attr])
 
     def _metrics_from_arrays(
         self,
@@ -599,36 +646,33 @@ class BiasMitigator:
 
     def _prepare_features(
         self,
-        df: pd.DataFrame,
+        df_work: pd.DataFrame,
         target_col: str,
         sensitive_attr: str,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, list]:
         """
-        Return (X, y, sensitive) arrays ready for sklearn.
-
-        - All numeric columns (excluding target) are used as features.
-        - Categorical columns are label-encoded.
-        - Rows with NaN in any feature are dropped.
+        Return (X, feature_cols) where X encodes ALL columns
+        (numeric + categorical) excluding target and sensitive attr.
         """
-        feature_cols = [c for c in df.columns if c != target_col]
-        work = df[feature_cols + [target_col]].copy()
+        exclude = {target_col, sensitive_attr, '__target__', '__sens__'}
+        feature_cols = [c for c in df_work.columns if c not in exclude]
 
-        # Encode categoricals
+        X_parts = []
         for col in feature_cols:
-            if not pd.api.types.is_numeric_dtype(work[col]):
+            col_data = df_work[col].copy()
+            if col_data.dtype in ['int64', 'float64', 'int32', 'float32']:
+                filled = col_data.fillna(col_data.median())
+                X_parts.append(filled.values.reshape(-1, 1).astype(float))
+            else:
                 le = LabelEncoder()
-                work[col] = le.fit_transform(work[col].astype(str).fillna("__missing__"))
+                filled = col_data.fillna('missing').astype(str)
+                encoded = le.fit_transform(filled)
+                X_parts.append(encoded.reshape(-1, 1).astype(float))
 
-        work = work.dropna()
+        if not X_parts:
+            raise ValueError("No features found after encoding.")
 
-        # Sensitive array (keep original encoded values for grouping)
-        sensitive_encoded = work[sensitive_attr].values
-
-        # Feature matrix: numeric features only (already encoded)
-        X = work[feature_cols].select_dtypes(include="number").fillna(0).values
-        y = work[target_col].astype(int).values
-
-        return X, y, sensitive_encoded
+        return np.hstack(X_parts), feature_cols
 
     # ── Winner selection ──────────────────────────────────────────────────────
 
