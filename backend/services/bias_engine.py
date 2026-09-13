@@ -70,11 +70,9 @@ class BiasEngine:
                 }
                 continue
 
-            # Drop rows where the attribute or label is null
-            cols_to_keep = list(dict.fromkeys([attr, target_col, label_col]))
-            sub = df[cols_to_keep].dropna(
-                subset=list(dict.fromkeys([attr, label_col]))
-            )
+            # Drop rows where the attribute or label is null, but keep ALL columns
+            # so _compute_attr_metrics has feature columns available for internal EOD/AOD model
+            sub = df.dropna(subset=list(dict.fromkeys([attr, label_col])))
             if sub.empty:
                 metrics_per_attr[attr] = {
                     "error": "No valid rows after dropping nulls."
@@ -172,6 +170,7 @@ class BiasEngine:
         DI = round(unpriv_rate / priv_rate, 4) if priv_rate > 0 else 0.0
 
         if label_col != target_col:
+            # External model predictions available — compare predictions vs ground truth
             y_true = df_work[target_col]
             if set(y_true.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
                 y_true_bin = y_true.astype(int)
@@ -184,15 +183,99 @@ class BiasEngine:
             else:
                 y_true_bin = (y_true == y_true.mode()[0]).astype(int)
             df_work['__truth__'] = y_true_bin
-            
+
             priv_encoded = next(k for k, v in group_names.items() if str(v) == priv_name)
             unpriv_encoded = next(k for k, v in group_names.items() if str(v) == unpriv_name)
             eod, aod = self._equal_opportunity_encoded(df_work, '__truth__', '__target__', '__sens__', priv_encoded, unpriv_encoded)
             EOD = round(eod, 4) if eod is not None else None
             AOD = round(aod, 4) if aod is not None else None
         else:
+            # No external model — train an internal classifier and compute EOD/AOD from
+            # its predictions vs ground truth, same method used by BiasMitigator.
             EOD = None
             AOD = None
+            try:
+                import numpy as _np
+                from sklearn.ensemble import GradientBoostingClassifier
+                from sklearn.model_selection import train_test_split
+                from sklearn.preprocessing import LabelEncoder as _LE
+
+                # Build clean feature matrix — exclude target and sensitive attr
+                exclude_cols = {target_col, attr, label_col, '__target__', '__sens__',
+                                '__truth__', '__predictions__'}
+                feat_candidates = [c for c in df_work.columns if c not in exclude_cols]
+
+                if feat_candidates and len(df_work) >= 60:
+                    y_all = df_work['__target__'].values
+                    s_all = df_work['__sens__'].values
+
+                    # Leakage guard: DROP individual leaking columns (corr > 0.95 with target)
+                    # Do NOT abort the entire model — just remove the bad columns.
+                    clean_cols = []
+                    X_parts = []
+                    for fc in feat_candidates:
+                        col_data = df_work[fc].copy()
+                        if col_data.dtype.kind in ('i', 'f'):
+                            arr = col_data.fillna(col_data.median()).values.astype(float)
+                        else:
+                            arr = _LE().fit_transform(
+                                col_data.fillna('missing').astype(str)
+                            ).astype(float)
+
+                        try:
+                            corr = abs(float(_np.corrcoef(arr, y_all)[0, 1]))
+                        except Exception:
+                            corr = 0.0
+
+                        if corr > 0.95:
+                            # Skip this column — it leaks the target
+                            continue
+
+                        clean_cols.append(fc)
+                        X_parts.append(arr.reshape(-1, 1))
+
+                    if X_parts:  # At least one clean feature remains
+                        X_all = _np.hstack(X_parts)
+                        idx = _np.arange(len(df_work))
+                        idx_tr, idx_te = train_test_split(
+                            idx, test_size=0.30, random_state=42, stratify=y_all
+                        )
+                        clf = GradientBoostingClassifier(
+                            n_estimators=100, max_depth=3,
+                            learning_rate=0.1, subsample=0.8,
+                            random_state=42
+                        )
+                        clf.fit(X_all[idx_tr], y_all[idx_tr])
+                        y_pred = clf.predict(X_all[idx_te])
+                        y_true_te = y_all[idx_te]
+                        s_te = s_all[idx_te]
+
+                        # Compute EOD and AOD from model predictions vs ground truth
+                        groups_te = _np.unique(s_te)
+                        if len(groups_te) >= 2:
+                            rates = {g: _np.mean(y_pred[s_te == g]) for g in groups_te}
+                            priv_g   = max(rates, key=rates.get)
+                            unpriv_g = min(rates, key=rates.get)
+
+                            def _tpr_fpr(mask):
+                                yg, pg = y_true_te[mask], y_pred[mask]
+                                tp = int(((pg == 1) & (yg == 1)).sum())
+                                fn = int(((pg == 0) & (yg == 1)).sum())
+                                fp = int(((pg == 1) & (yg == 0)).sum())
+                                tn = int(((pg == 0) & (yg == 0)).sum())
+                                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                                return tpr, fpr
+
+                            tpr_p, fpr_p = _tpr_fpr(s_te == priv_g)
+                            tpr_u, fpr_u = _tpr_fpr(s_te == unpriv_g)
+
+                            EOD = round(float(tpr_p - tpr_u), 4)
+                            AOD = round(float(((tpr_p - tpr_u) + (fpr_p - fpr_u)) / 2), 4)
+            except Exception as _e:
+                # Never break analysis if internal model fails
+                pass
+
 
         if SPD > 0.99 and DI < 0.01:
             warnings_list.append("Metrics look extreme. Check that target column is correctly binary and sensitive attribute has meaningful variation.")
