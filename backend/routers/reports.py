@@ -3,9 +3,9 @@ from datetime import datetime
 from bson import ObjectId
 from typing import Optional
 import json
-from ..database import get_db
-from ..routers.auth import require_user, get_current_user
-from ..services.auth_service import serialize_doc
+from database import get_db
+from routers.auth import require_user, get_current_user
+from services.auth_service import serialize_doc
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 

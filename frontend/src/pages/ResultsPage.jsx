@@ -51,34 +51,17 @@ export default function ResultsPage() {
         const explanationsObj = {};
         explResults.forEach((res, i) => {
           if (res.status === "fulfilled") {
-            explanationsObj[sensitiveAttrs[i]] = res.value.data;
+            const data = res.value.data;
+            explanationsObj[sensitiveAttrs[i]] = data;
+            if (data.gemini_explanation) {
+              setGeminiExplanation(sensitiveAttrs[i], data.gemini_explanation);
+            }
           }
         });
         
         if (!cancelled) {
-           // We just set the whole object
-           setExplanation(explanationsObj);
-           
-           // Now run gemini-explain in parallel
-           const geminiPromises = sensitiveAttrs.map(attr => 
-             client.post("/api/gemini-explain", { session_id: sessionId, sensitive_attr: attr })
-               .catch(err => {
-                 if (err.response?.status === 503) {
-                   const fallbackReason = explanationsObj[attr]?.plain_reason || "No rule-based explanation available.";
-                   return { data: { explanation: `AI Copilot unavailable — showing rule-based explanation instead.\n\n${fallbackReason}` } };
-                 }
-                 throw err;
-               })
-           );
-           const geminiResults = await Promise.allSettled(geminiPromises);
-           
-           if (!cancelled) {
-             geminiResults.forEach((res, i) => {
-               if (res.status === "fulfilled") {
-                 setGeminiExplanation(sensitiveAttrs[i], res.value.data.explanation);
-               }
-             });
-           }
+          // We set the whole explanations object
+          setExplanation(explanationsObj);
         }
       } catch (err) {
         console.error("Failed to fetch explanations", err);
