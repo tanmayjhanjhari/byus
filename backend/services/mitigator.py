@@ -44,39 +44,20 @@ class BiasMitigator:
         """
         Run both mitigation strategies and return a unified comparison.
         """
-        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
-
-        # Binarize target
-        y = df_clean[target_col]
-        if set(y.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
-            y_bin = y.astype(int)
-        elif y.nunique() == 2:
-            vals = sorted(y.unique())
-            y_bin = y.map({vals[0]: 0, vals[1]: 1})
-        elif pd.api.types.is_numeric_dtype(y):
-            median = y.median()
-            y_bin = (y > median).astype(int)
-        else:
-            y_bin = (y == y.mode()[0]).astype(int)
-        df_clean['__target__'] = y_bin
-
-        # Encode sensitive attr
-        from sklearn.preprocessing import LabelEncoder
-        le = LabelEncoder()
-        df_clean['__sens__'] = le.fit_transform(df_clean[sensitive_attr].astype(str))
-
-        # Select numeric features
-        feature_cols = [c for c in df_clean.columns
-                        if c not in [target_col, sensitive_attr, '__target__', '__sens__']
-                        and pd.api.types.is_numeric_dtype(df_clean[c])]
-        if not feature_cols:
-            raise ValueError("No numeric feature columns found for mitigation.")
-        
-        # Fill NA with 0 for features
-        df_clean[feature_cols] = df_clean[feature_cols].fillna(0)
+        # Sanity check: warn about potential leakage columns before running
+        df_check = df.copy().dropna(subset=[target_col])
+        y_check = df_check[target_col]
+        if set(y_check.unique()).issubset({0, 1, 0.0, 1.0}):
+            target_base = target_col.replace('_binary', '').replace('_encoded', '')
+            leak_suspects = [c for c in df_check.columns
+                             if c != target_col
+                             and target_base.lower() in c.lower()]
+            if leak_suspects:
+                print(f"[Mitigator] WARNING: Possible leakage columns "
+                      f"detected: {leak_suspects}. These will be excluded.")
 
         rew = self.reweigh(df, target_col, sensitive_attr)
-        thr = self.threshold_adjust(df_clean, feature_cols)
+        thr = self.threshold_adjust(df, target_col, sensitive_attr)
 
         # ── Winner selection (cause-aware) ─────────────────────────────────────────
         spd_r = abs(rew["after"].get("SPD", 999) or 999)
@@ -314,15 +295,28 @@ class BiasMitigator:
 
         df_work = df.copy().dropna(subset=[target_col, sensitive_attr])
 
-        # --- Encode target ---
+        # --- Binarize target first so leakage detection has __target__ available ---
+        y_raw = df_work[target_col]
+        if set(y_raw.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+            y_bin = y_raw.astype(int)
+        elif y_raw.nunique() == 2:
+            vals = sorted(y_raw.unique())
+            y_bin = y_raw.map({vals[0]: 0, vals[1]: 1})
+        elif pd.api.types.is_numeric_dtype(y_raw):
+            y_bin = (y_raw > y_raw.median()).astype(int)
+        else:
+            y_bin = (y_raw == y_raw.mode()[0]).astype(int)
+        df_work['__target__'] = y_bin
+
+        # --- Encode target (for stratification) ---
         le_t = LabelEncoder()
-        y_all = le_t.fit_transform(df_work[target_col].astype(str))
+        y_all = le_t.fit_transform(df_work['__target__'].astype(str))
 
         # --- Encode sensitive attr ---
         le_s = LabelEncoder()
         s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
 
-        # --- Encode ALL features (numeric + categorical) ---
+        # --- Encode ALL features (numeric + categorical), leakage auto-excluded ---
         X_all, feature_cols = self._prepare_features(df_work, target_col, sensitive_attr)
         n = len(df_work)
 
@@ -407,6 +401,17 @@ class BiasMitigator:
         improvement_pct = round(((spd_b - spd_a) / max(spd_b, 1e-9)) * 100, 1)
         accuracy_retained = round((after["accuracy"] / max(before["accuracy"], 1e-9)) * 100, 1)
 
+        if abs(improvement_pct) < 3:
+            diagnostic = (
+                f"Low bias reduction ({improvement_pct:.1f}%) may occur when: "
+                f"(1) bias is driven by a proxy feature that survives weight adjustment, "
+                f"(2) the sensitive attribute has too many unique groups, or "
+                f"(3) the dataset is too small for statistical learning. "
+                f"The fairness metrics (SPD/DI) remain accurate — only the mitigation simulation was limited."
+            )
+        else:
+            diagnostic = None
+
         effects = {
             "accuracy_delta":  round(after["accuracy"]  - before["accuracy"],  4),
             "precision_delta": round(after["precision"] - before["precision"], 4),
@@ -415,6 +420,7 @@ class BiasMitigator:
             "spd_delta":       round(after["SPD"]       - before["SPD"],       4),
             "bias_reduction_pct":   improvement_pct,
             "accuracy_retained_pct": accuracy_retained,
+            "diagnostic": diagnostic,
         }
 
         return {"before": before, "after": after, "effects": effects,
@@ -427,16 +433,34 @@ class BiasMitigator:
 
     # ── Threshold Adjustment ──────────────────────────────────────────────────
 
-    def threshold_adjust(self, df_clean: pd.DataFrame, feature_cols: list[str]):
+    def threshold_adjust(self, df: pd.DataFrame, target_col: str, sensitive_attr: str):
         import numpy as np
 
-        # Rebuild target and sensitive arrays from df_clean special columns
-        target_col = '__target__'
-        sensitive_attr = '__sens__'
-        y_all = df_clean[target_col].values
-        s_all = df_clean[sensitive_attr].values
+        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
 
-        # Encode ALL features using the shared helper
+        # Binarize target
+        y_raw = df_clean[target_col]
+        if set(y_raw.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+            y_bin = y_raw.astype(int)
+        elif y_raw.nunique() == 2:
+            vals = sorted(y_raw.unique())
+            y_bin = y_raw.map({vals[0]: 0, vals[1]: 1})
+        elif pd.api.types.is_numeric_dtype(y_raw):
+            y_bin = (y_raw > y_raw.median()).astype(int)
+        else:
+            y_bin = (y_raw == y_raw.mode()[0]).astype(int)
+        df_clean['__target__'] = y_bin
+
+        # Encode sensitive attr
+        from sklearn.preprocessing import LabelEncoder
+        le_s = LabelEncoder()
+        df_clean['__sens__'] = le_s.fit_transform(df_clean[sensitive_attr].astype(str))
+
+        # Get arrays
+        y_all = df_clean['__target__'].values
+        s_all = df_clean['__sens__'].values
+
+        # Encode ALL features using the shared helper (leakage excluded)
         X_all, _ = self._prepare_features(df_clean, target_col, sensitive_attr)
 
         idx = np.arange(len(df_clean))
@@ -543,6 +567,17 @@ class BiasMitigator:
         improvement_pct = round(((spd_before - spd_after) / max(spd_before, 1e-9)) * 100, 1)
         accuracy_retained = round((after_metrics["accuracy"] / max(before_metrics["accuracy"], 1e-9)) * 100, 1)
 
+        if abs(improvement_pct) < 3:
+            diagnostic = (
+                f"Low bias reduction ({improvement_pct:.1f}%) may occur when: "
+                f"(1) bias is driven by a proxy feature that survives threshold adjustment, "
+                f"(2) the sensitive attribute has too many unique groups, or "
+                f"(3) the dataset is too small for statistical learning. "
+                f"The fairness metrics (SPD/DI) remain accurate — only the mitigation simulation was limited."
+            )
+        else:
+            diagnostic = None
+
         effects = {
             "accuracy_delta": round(after_metrics["accuracy"] - before_metrics["accuracy"], 4),
             "precision_delta": round(after_metrics["precision"] - before_metrics["precision"], 4),
@@ -551,6 +586,7 @@ class BiasMitigator:
             "spd_delta": round(after_metrics["SPD"] - before_metrics["SPD"], 4),
             "bias_reduction_pct": improvement_pct,
             "accuracy_retained_pct": accuracy_retained,
+            "diagnostic": diagnostic,
         }
 
         return {
@@ -724,15 +760,86 @@ class BiasMitigator:
     ) -> tuple[np.ndarray, list]:
         """
         Return (X, feature_cols) where X encodes ALL columns
-        (numeric + categorical) excluding target and sensitive attr.
+        (numeric + categorical) excluding target, sensitive attr,
+        and any columns that leak information about the target.
         """
-        exclude = {target_col, sensitive_attr, '__target__', '__sens__'}
-        feature_cols = [c for c in df_work.columns if c not in exclude]
+        import numpy as np
+        from sklearn.preprocessing import LabelEncoder
 
+        # Step 1: Build exclusion list
+        exclude = {
+            target_col, sensitive_attr,
+            '__target__', '__sens__', '__y__', '__s__'
+        }
+
+        # Step 2: Auto-detect leaking columns BEFORE selecting features
+        # Use __target__ if binarized version exists, else fall back to target_col
+        y_col = '__target__' if '__target__' in df_work.columns else target_col
+        try:
+            y_vals = df_work[y_col].astype(float)
+        except Exception:
+            y_vals = None
+
+        leaking_cols = set()
+        if y_vals is not None:
+            for col in df_work.columns:
+                if col in exclude:
+                    continue
+                try:
+                    col_data = df_work[col]
+                    if col_data.dtype.kind in ('i', 'f'):  # numeric
+                        corr = abs(float(col_data.corr(y_vals)))
+                        if corr > 0.95:
+                            leaking_cols.add(col)
+                            print(f"[Mitigator] LEAKAGE DETECTED: '{col}' "
+                                  f"corr={corr:.3f} with target — excluded")
+                    else:
+                        # Categorical: check encoded correlation
+                        col_encoded = LabelEncoder().fit_transform(
+                            col_data.fillna('missing').astype(str))
+                        corr = abs(float(np.corrcoef(
+                            col_encoded, y_vals.values)[0, 1]))
+                        if corr > 0.95:
+                            leaking_cols.add(col)
+                            print(f"[Mitigator] LEAKAGE DETECTED: '{col}' "
+                                  f"corr={corr:.3f} with target — excluded")
+                except Exception:
+                    pass  # Keep column if check fails
+
+        # Step 3: Name-based leakage — e.g. target='income_binary' → exclude 'income'
+        target_base = (target_col
+                       .replace('_binary', '')
+                       .replace('_encoded', '')
+                       .replace('_label', '')
+                       .replace('_num', '')
+                       .lower())
+        for col in df_work.columns:
+            col_lower = col.lower()
+            if col in exclude or col in leaking_cols:
+                continue
+            if target_base in col_lower and col_lower != target_col.lower():
+                leaking_cols.add(col)
+                print(f"[Mitigator] NAME-BASED LEAKAGE: '{col}' "
+                      f"excluded (derived from '{target_col}')")
+
+        all_exclude = exclude | leaking_cols
+
+        # Step 4: Select clean feature columns
+        feature_cols = [c for c in df_work.columns if c not in all_exclude]
+
+        if not feature_cols:
+            raise ValueError(
+                f"No valid features found after excluding target, sensitive attr, "
+                f"and {len(leaking_cols)} leaking column(s): {leaking_cols}. "
+                f"Check your dataset — the target column may have a near-duplicate "
+                f"column in the data."
+            )
+
+        # Step 5: Encode all columns
         X_parts = []
         for col in feature_cols:
             col_data = df_work[col].copy()
-            if col_data.dtype in ['int64', 'float64', 'int32', 'float32']:
+            if col_data.dtype.kind in ('i', 'f'):
                 filled = col_data.fillna(col_data.median())
                 X_parts.append(filled.values.reshape(-1, 1).astype(float))
             else:

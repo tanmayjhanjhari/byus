@@ -99,6 +99,10 @@ async def mitigate(
     # ── Persist in session ────────────────────────────────────────────────────
     session["mitigation_results"] = mitigation_results
     session["fairlearn_results"] = fairlearn_result
+    # Store flat keys for report generator
+    session["mitigation"]     = mitigation_results
+    session["winner"]         = mitigation_results["winner"]
+    session["winner_reason"]  = mitigation_results.get("winner_reason", "")
 
     # ── Build response ────────────────────────────────────────────────────────
     response: dict[str, Any] = {

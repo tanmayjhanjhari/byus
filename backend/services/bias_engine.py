@@ -88,21 +88,10 @@ class BiasEngine:
         # ── Audit Score ───────────────────────────────────────────────────────
         audit_score_rounded = self._compute_audit_score(metrics_per_attr)
 
-        # Grade
-        grade = self._grade(audit_score_rounded)
-
-        # Overall severity
-        severities = [
-            m["severity"]
-            for m in metrics_per_attr.values()
-            if isinstance(m, dict) and "severity" in m
-        ]
-        if "high" in severities:
-            overall_severity = "high"
-        elif "medium" in severities:
-            overall_severity = "medium"
-        else:
-            overall_severity = "low"
+        # Grade and overall severity MUST come from audit_score only
+        # (never from per-attribute severities, which can contradict the score)
+        grade            = self._get_grade(audit_score_rounded)
+        overall_severity = self._get_overall_severity(audit_score_rounded)
 
         return {
             "metrics_per_attr": metrics_per_attr,
@@ -316,7 +305,30 @@ class BiasEngine:
     # ── Severity & Grade ──────────────────────────────────────────────────────
 
     @staticmethod
+    def _get_overall_severity(audit_score: float) -> str:
+        """Severity must always match the grade, derived from audit_score."""
+        if audit_score >= 70:
+            return "low"
+        elif audit_score >= 50:
+            return "medium"
+        else:
+            return "high"
+
+    @staticmethod
+    def _get_grade(audit_score: float) -> str:
+        """Grade derived from audit_score."""
+        if audit_score >= 85:
+            return "A"
+        elif audit_score >= 70:
+            return "B"
+        elif audit_score >= 50:
+            return "C"
+        else:
+            return "F"
+
+    @staticmethod
     def _severity(spd: float) -> str:
+        """Per-attribute severity based on SPD thresholds (independent of overall grade)."""
         abs_spd = abs(spd)
         if abs_spd < 0.1:
             return "low"
@@ -326,14 +338,8 @@ class BiasEngine:
 
     @staticmethod
     def _grade(score: float) -> str:
-        if score >= 85:
-            return "A (Fair)"
-        elif score >= 70:
-            return "B (Minor issues)"
-        elif score >= 50:
-            return "C (Moderate bias)"
-        else:
-            return "F (High bias — action required)"
+        """Legacy method kept for backwards compat — delegates to _get_grade."""
+        return BiasEngine._get_grade(score)
 
     def _compute_audit_score(self, metrics_per_attr: dict) -> float:
         if not metrics_per_attr:

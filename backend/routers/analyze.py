@@ -183,6 +183,11 @@ async def analyze(
     session["target_col"] = body.target_col
     session["sensitive_attrs"] = body.sensitive_attrs
     session["df_with_predictions"] = df  # needed for mitigation
+    # Store top-level keys so report generator can access directly
+    session["audit_score"]      = bias_results["audit_score"]
+    session["overall_severity"] = bias_results["overall_severity"]
+    session["grade"]            = bias_results["grade"]
+    session["metrics_per_attr"] = bias_results["metrics_per_attr"]
 
     # ── 6. Build response ─────────────────────────────────────────────────────
     response: dict[str, Any] = {

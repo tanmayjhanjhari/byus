@@ -256,7 +256,7 @@ class GeminiService:
     def detect_scenario(self, columns: list[str]) -> dict[str, Any]:
         """
         Classify the dataset into one of: hiring, lending, healthcare,
-        education, other.
+        education, income, criminal_justice, other.
 
         Returns
         -------
@@ -264,7 +264,9 @@ class GeminiService:
         """
         prompt = (
             f"Dataset columns: {columns}. "
-            "Classify into exactly one category: hiring, lending, healthcare, education, other. "
+            "Classify into exactly one category: hiring, lending, healthcare, education, income, criminal_justice, other. "
+            "IMPORTANT: For datasets with columns like 'income', 'income_binary', 'fnlwgt', 'education_num', "
+            "'capital_gain', 'capital_loss', 'hours_per_week' — classify as 'income', these are census income datasets. "
             'Return ONLY valid JSON with no markdown formatting: '
             '{"scenario": string, "confidence_pct": number, "reason": string}'
         )
@@ -276,19 +278,28 @@ class GeminiService:
         except Exception as e:
             # Rule-based scenario detection from column names
             cols_lower = [c.lower() for c in columns]
-            if any(w in cols_lower for w in ["loan","credit","approved","default","risk","debt"]):
+            # Income / census datasets — check FIRST (most specific)
+            if any(w in cols_lower for w in [
+                "income", "income_binary", "fnlwgt", "education_num",
+                "capital_gain", "capital_loss", "hours_per_week",
+                "salary", "wage", "earnings"
+            ]):
+                return {"scenario": "Income Classification",
+                        "confidence_pct": 85,
+                        "reason": "Detected income or census-related columns"}
+            elif any(w in cols_lower for w in ["loan", "credit", "approved", "default", "risk", "debt"]):
                 return {"scenario": "Lending", "confidence_pct": 80,
                         "reason": "Detected lending-related columns"}
-            elif any(w in cols_lower for w in ["hired","job","salary","occupation","employed"]):
+            elif any(w in cols_lower for w in ["hired", "job", "occupation", "employed"]):
                 return {"scenario": "Hiring", "confidence_pct": 80,
                         "reason": "Detected employment-related columns"}
-            elif any(w in cols_lower for w in ["diagnosis","disease","patient","hospital","medical"]):
+            elif any(w in cols_lower for w in ["diagnosis", "disease", "patient", "hospital", "medical"]):
                 return {"scenario": "Healthcare", "confidence_pct": 80,
                         "reason": "Detected healthcare-related columns"}
-            elif any(w in cols_lower for w in ["recid","crime","arrest","prison","sentence"]):
+            elif any(w in cols_lower for w in ["recid", "crime", "arrest", "prison", "sentence"]):
                 return {"scenario": "Criminal Justice", "confidence_pct": 80,
                         "reason": "Detected criminal justice columns"}
-            elif any(w in cols_lower for w in ["grade","gpa","score","admit","student"]):
+            elif any(w in cols_lower for w in ["grade", "gpa", "score", "admit", "student"]):
                 return {"scenario": "Education", "confidence_pct": 80,
                         "reason": "Detected education-related columns"}
             else:

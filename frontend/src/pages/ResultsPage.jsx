@@ -17,8 +17,8 @@ export default function ResultsPage() {
   const navigate = useNavigate();
   const store = useAnalysisStore();
   const { 
-    sessionId, metrics, validation, auditScore, grade, sensitiveAttrs, 
-    setExplanation, setGeminiExplanation 
+    sessionId, metrics, validation, auditScore, grade, sensitiveAttrs, overallSeverity,
+    setExplanation, setGeminiExplanation, explanation
   } = store;
 
   const [activeTab, setActiveTab] = useState("Metrics");
@@ -80,6 +80,21 @@ export default function ResultsPage() {
   const currentMetrics = metrics[activeAttr] || {};
   const groupStats = currentMetrics.group_stats || {};
 
+  // Compute worst/best group and gap for MetricCards "Why This Matters"
+  const sortedGroups = Object.entries(groupStats).sort(
+    (a, b) => (a[1].positive_rate ?? 0) - (b[1].positive_rate ?? 0)
+  );
+  const worstGroup = sortedGroups[0]?.[0] ?? null;
+  const bestGroup  = sortedGroups[sortedGroups.length - 1]?.[0] ?? null;
+  const gapPct = sortedGroups.length >= 2
+    ? ((sortedGroups[sortedGroups.length - 1][1].positive_rate ?? 0) -
+       (sortedGroups[0][1].positive_rate ?? 0)) * 100
+    : null;
+
+  // Plain reason from explainer for the active attribute
+  const attrExplanation = explanation?.[activeAttr] || {};
+  const plainReason = attrExplanation.plain_reason || attrExplanation.cause_label || null;
+
   return (
     <PageWrapper>
       <div className="mb-8 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
@@ -104,7 +119,13 @@ export default function ResultsPage() {
           <AuditScoreGauge score={auditScore} grade={grade} />
         </div>
         <div className="md:col-span-2">
-          <ValidationBanner validation={validation} metricsPerAttr={metrics} />
+          <ValidationBanner
+            validation={validation}
+            metricsPerAttr={metrics}
+            auditScore={auditScore}
+            grade={grade}
+            overallSeverity={overallSeverity}
+          />
         </div>
       </div>
 
@@ -163,7 +184,14 @@ export default function ResultsPage() {
                 transition={{ duration: 0.2 }}
                 className="space-y-8"
               >
-                <MetricCards metrics={currentMetrics} />
+                <MetricCards
+                  metrics={currentMetrics}
+                  worstGroup={worstGroup}
+                  bestGroup={bestGroup}
+                  gapPct={gapPct}
+                  plainReason={plainReason}
+                  grade={grade}
+                />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center pt-4 border-t border-white/[0.06]">
                   <div>
                     <h4 className="text-sm font-semibold text-textSecondary uppercase tracking-wider mb-2">Fairness Profile</h4>
