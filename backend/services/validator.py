@@ -1,5 +1,5 @@
 """
-ByUs — Data Validation Service
+FairEnough — Data Validation Service
 
 Validates a DataFrame / target / sensitive attribute combination before any
 fairness analysis runs.  Returns a structured dict that downstream routers
@@ -14,7 +14,7 @@ import pandas as pd
 
 
 class DataValidator:
-    """Validate a dataset for ByUs fairness analysis."""
+    """Validate a dataset for FairEnough fairness analysis."""
 
     # ── Thresholds ────────────────────────────────────────────────────────────
     MIN_ROWS_RELIABLE: int = 200
@@ -143,7 +143,7 @@ class DataValidator:
         fallback_needed: bool = target_type in ("multiclass", "continuous")
 
         if supported:
-            engine = "byus"
+            engine = "fairenough"
         else:
             engine = "fairlearn_fallback"
 

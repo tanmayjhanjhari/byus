@@ -1,5 +1,5 @@
 """
-ByUs — Fairlearn Fallback Service
+FairEnough — Fairlearn Fallback Service
 
 Handles datasets that are not binary classification:
   - Continuous targets: binarized at the median

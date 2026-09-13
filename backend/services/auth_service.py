@@ -7,7 +7,7 @@ import os
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-JWT_SECRET = os.getenv("JWT_SECRET", "byus_default_secret")
+JWT_SECRET = os.getenv("JWT_SECRET", "fairenough_default_secret")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", 168))
 

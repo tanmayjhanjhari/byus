@@ -1,4 +1,4 @@
-# ByUs — Demo Script
+# FairEnough — Demo Script
 
 > **3-Minute Demo for Judges**
 > Showcases all major platform features end-to-end using the included `credit_bias.csv` sample dataset.
@@ -60,7 +60,7 @@
 
 ### Step 4 — Gemini Scenario Auto-Detection (0:55 – 1:10)
 
-**Action:** Click "Detect Scenario" — Gemini 2.0 Flash analyzes the dataset.
+**Action:** Click "Detect Scenario" — Google Gemini analyzes the dataset.
 
 **What to point out:**
 - Spinner runs for ~2 seconds
@@ -165,7 +165,7 @@
 
 **What to point out:**
 - PDF generates server-side in ~2 seconds
-- File downloads as: `byus_audit_{session_id}_{timestamp}.pdf`
+- File downloads as: `fairenough_audit_{session_id}_{timestamp}.pdf`
 - Report contains 4 pages:
   - **Page 1**: Dataset summary — 1,000 rows, 7 columns, Lending scenario, binary classification
   - **Page 2**: Bias findings — all metric values with severity labels, Audit Score 34/100 grade F
@@ -177,7 +177,7 @@
 
 ## Key Talking Points for Judges
 
-1. **End-to-End**: ByUs covers the full fairness audit lifecycle — detect, explain, mitigate, report
+1. **End-to-End**: FairEnough covers the full fairness audit lifecycle — detect, explain, mitigate, report
 2. **Gemini Integration**: Three distinct Gemini use cases: scenario detection, explanation engine, Copilot chat
 3. **Legal Alignment**: DI threshold of 0.8 aligns with EEOC 80% rule and EU AI Act requirements
 4. **No Bias Expertise Required**: Plain-English explanations and tooltips make the platform accessible to non-technical users

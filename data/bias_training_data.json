@@ -405,5 +405,19 @@
     "source": "Auto:adult.data-race",
     "auto": true,
     "timestamp": "2026-09-13T21:10:44.948873"
+  },
+  {
+    "spd": 0.6667,
+    "di": 0.1666,
+    "top_proxy_r": 0.7553,
+    "group_ratio": 1.0,
+    "proxy_count": 1,
+    "rate_variance": 0.3334,
+    "scenario": 6,
+    "cause": "proxy",
+    "severity": "high",
+    "source": "Auto:test_bias.csv-gender",
+    "auto": true,
+    "timestamp": "2026-09-13T22:17:49.816619"
   }
 ]

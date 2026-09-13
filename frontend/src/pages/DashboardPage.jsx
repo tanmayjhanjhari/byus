@@ -109,7 +109,7 @@ export default function DashboardPage() {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `byus-audit-${sessionId.substring(0,8)}.pdf`);
+      link.setAttribute('download', `fairenough-audit-${sessionId.substring(0,8)}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.remove();

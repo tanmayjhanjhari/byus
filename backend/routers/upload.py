@@ -1,5 +1,5 @@
 """
-ByUs — Upload Router
+FairEnough — Upload Router
 
 POST /api/upload       — ingest a CSV dataset
 POST /api/upload-model — ingest a serialised scikit-learn model
@@ -139,6 +139,7 @@ async def upload_csv(
         "categorical_cols": categorical_cols,
         "preview": preview,
         "preprocessing_report": report,
+        "scenario": report.get("detected_scenario", "other"),
         "suggested_sensitive": suggested_sensitive,
         "blocked_from_sensitive": blocked_from_sensitive,
     }
@@ -250,6 +251,7 @@ async def load_sample_dataset(request: Request, dataset_id: str):
         "categorical_cols": categorical_cols,
         "preview": preview,
         "preprocessing_report": report,
+        "scenario": report.get("detected_scenario", "other"),
         "suggested_sensitive": suggested_sensitive,
         "blocked_from_sensitive": blocked_from_sensitive,
     }

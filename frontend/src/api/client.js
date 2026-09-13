@@ -12,7 +12,7 @@ const client = axios.create({
 client.interceptors.request.use((config) => {
   // Get token from localStorage directly (avoid circular import with store)
   try {
-    const authData = JSON.parse(localStorage.getItem('byus-auth') || '{}')
+    const authData = JSON.parse(localStorage.getItem('fairenough-auth') || localStorage.getItem('byus-auth') || '{}')
     const token = authData?.state?.token
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -30,6 +30,7 @@ client.interceptors.response.use(
       const isProtected = error.config.url.includes('/api/reports/')
                        || error.config.url.includes('/api/auth/me')
       if (isProtected) {
+        localStorage.removeItem('fairenough-auth')
         localStorage.removeItem('byus-auth')
         toast.error('Session expired. Please log in again.', {
           duration: 5000,

@@ -150,7 +150,7 @@ export default function AuthModal({ isOpen, onClose }) {
                 <p className="text-xs text-textSecondary mt-1 text-center leading-relaxed">
                   {mode === "login"
                     ? "Sign in to persist reports and track historical bias analytics."
-                    : "Join ByUs to unlock your personalized analysis dashboard."}
+                    : "Join FairEnough to unlock your personalized analysis dashboard."}
                 </p>
               </div>
 

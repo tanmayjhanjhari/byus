@@ -21,7 +21,7 @@ const useAuthStore = create(
       })),
     }),
     {
-      name: 'byus-auth',   // persisted in localStorage
+      name: 'fairenough-auth',   // persisted in localStorage
       partialize: (state) => ({
         user: state.user,
         token: state.token,

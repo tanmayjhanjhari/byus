@@ -1,5 +1,5 @@
 """
-ByUs — Analyze Router
+FairEnough — Analyze Router
 
 POST /api/analyze
   1. Validate the dataset with DataValidator
@@ -52,7 +52,7 @@ async def analyze(
     request: Request,
 ) -> dict[str, Any]:
     """
-    Run the full ByUs bias analysis pipeline.
+    Run the full FairEnough bias analysis pipeline.
 
     Steps:
     1. Retrieve the dataset from the session store.
@@ -196,6 +196,9 @@ async def analyze(
     session["metrics_per_attr"] = bias_results["metrics_per_attr"]
 
     # ── 6. Build response ─────────────────────────────────────────────────────
+    raw_scenario = session.get("scenario", "other")
+    scenario_str = raw_scenario if isinstance(raw_scenario, str) else raw_scenario.get("scenario", "other")
+
     response: dict[str, Any] = {
         "session_id": body.session_id,
         "validation": validation,
@@ -205,6 +208,7 @@ async def analyze(
         "overall_severity": bias_results["overall_severity"],
         "grade_label": bias_results.get("grade_label", ""),
         "model_used": model_used,
+        "scenario": scenario_str,
     }
 
     # ── 7. Auto-learning + pattern predictions ───────────────────────────────

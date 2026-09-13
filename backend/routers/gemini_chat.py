@@ -1,7 +1,7 @@
 """
-ByUs — Gemini Chat Router
+FairEnough — Gemini Chat Router
 
-POST /api/detect-scenario  — classify dataset domain via Gemini
+POST /api/detect-scenario  — classify dataset domain via Google Gemini
 POST /api/gemini-explain   — generate manager-friendly bias explanation
 POST /api/gemini-chat      — multi-turn Bias Copilot conversation
 """
@@ -69,7 +69,7 @@ async def detect_scenario(
     request: Request,
 ) -> dict[str, Any]:
     """
-    Use Gemini 2.0 Flash to classify the dataset into a domain scenario.
+    Use Google Gemini to classify the dataset into a domain scenario.
     Result is stored in the session for downstream use in explanations.
     """
     sessions: dict = request.app.state.sessions
@@ -143,7 +143,7 @@ async def gemini_explain(
     )
 
     scenario_data: dict = session.get("scenario", {})
-    scenario: str = scenario_data.get("scenario", "other")
+    scenario: str = scenario_data if isinstance(scenario_data, str) else scenario_data.get("scenario", "other")
 
     # ── Call Gemini ───────────────────────────────────────────────────────────
     try:
@@ -199,7 +199,8 @@ async def gemini_chat(
 
     # ── Build condensed context ───────────────────────────────────────────────
     bias_results: dict = session.get("bias_results", {})
-    scenario_data: dict = session.get("scenario", {})
+    scenario_data = session.get("scenario", {})
+    scenario_str: str = scenario_data if isinstance(scenario_data, str) else scenario_data.get("scenario", "other")
     mitigation: dict = session.get("mitigation_results", {})
 
     metrics_summary: dict = {}
@@ -220,7 +221,7 @@ async def gemini_chat(
         "audit_score": bias_results.get("audit_score"),
         "grade": bias_results.get("grade"),
         "overall_severity": bias_results.get("overall_severity"),
-        "scenario": scenario_data.get("scenario", "other"),
+        "scenario": scenario_str,
         "metrics_summary": metrics_summary,
         "mitigation_winner": mitigation.get("winner"),
     }

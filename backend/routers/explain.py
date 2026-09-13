@@ -1,5 +1,5 @@
 """
-ByUs — Explain Router
+FairEnough — Explain Router
 
 POST /api/explain
   Runs BiasExplainer for a single sensitive attribute and stores the
@@ -87,7 +87,7 @@ async def explain(
 
     # ── Call Gemini for narrative explanation ─────────────────────────────────
     scenario_data = session.get("scenario", {})
-    scenario = scenario_data.get("scenario", "unknown")
+    scenario = scenario_data if isinstance(scenario_data, str) else scenario_data.get("scenario", "unknown")
     
     plain_reason = explanation.get("plain_reason", "")
     

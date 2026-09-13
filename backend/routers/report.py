@@ -1,5 +1,5 @@
 """
-ByUs — Report Router
+FairEnough — Report Router
 
 GET /api/report/{session_id}
   Generates and streams a multi-page PDF audit report using ReportGenerator.
@@ -60,7 +60,7 @@ async def download_report(
 
     # ── Stream as download ────────────────────────────────────────────────────
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"byus_audit_{session_id[:8]}_{timestamp}.pdf"
+    filename = f"fairenough_audit_{session_id[:8]}_{timestamp}.pdf"
 
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

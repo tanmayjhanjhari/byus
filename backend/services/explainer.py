@@ -1,5 +1,5 @@
 """
-ByUs — Bias Explainer Service
+FairEnough — Bias Explainer Service
 
 Analyses *why* bias exists in a dataset:
   - Correlation between the sensitive attribute and target

@@ -77,7 +77,7 @@ export default function ReportPage() {
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `byus-audit-${sessionId.substring(0,8)}.pdf`);
+      link.setAttribute('download', `fairenough-audit-${sessionId.substring(0,8)}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -91,7 +91,7 @@ export default function ReportPage() {
 
   const handleCopySummary = () => {
     const summary = `
-ByUs Bias Audit Summary
+FairEnough Bias Audit Summary
 Dataset: ${filename}
 Target: ${targetCol}
 Score: ${auditScore}/100 (Grade ${grade})
@@ -146,7 +146,7 @@ Recommended Mitigation: ${mitigation?.winner || "N/A"}
         row_count: store.rowCount || 0,
         target_col: targetCol,
         sensitive_attrs: sensitiveAttrs,
-        scenario: scenario || "Other",
+        scenario: (typeof scenario === 'string' ? scenario : scenario?.scenario) || "Other",
         audit_score: auditScore,
         grade: grade || "F",
         overall_severity: overallSeverity || "low",
@@ -207,7 +207,7 @@ Recommended Mitigation: ${mitigation?.winner || "N/A"}
             className="glass-card p-6 border border-white/[0.06] flex flex-col"
           >
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold text-textPrimary">ByUs Bias Audit Summary</h3>
+              <h3 className="text-lg font-semibold text-textPrimary">FairEnough Bias Audit Summary</h3>
               <button 
                 onClick={handleCopySummary}
                 className="text-textSecondary hover:text-textPrimary transition-colors"
@@ -234,7 +234,7 @@ Recommended Mitigation: ${mitigation?.winner || "N/A"}
               </div>
               <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
                 <span className="text-sm text-textSecondary">Scenario</span>
-                <span className="text-sm font-medium text-textPrimary capitalize">{scenario?.scenario || "Other"}</span>
+                <span className="text-sm font-medium text-textPrimary capitalize">{(typeof scenario === 'string' ? scenario : scenario?.scenario) || "Other"}</span>
               </div>
               <div className="flex justify-between items-center py-2 border-b border-white/[0.04]">
                 <span className="text-sm text-textSecondary">Recommended Fix</span>
@@ -278,7 +278,7 @@ Recommended Mitigation: ${mitigation?.winner || "N/A"}
                   <span className="text-sm font-semibold">Save to Cloud History</span>
                 </div>
                 <p className="text-xs text-textSecondary leading-relaxed">
-                  Store this session on your personal ByUs account. Access statistics, compare models, and review historical details instantly.
+                  Store this session on your personal FairEnough account. Access statistics, compare models, and review historical details instantly.
                 </p>
                 <button
                   onClick={handleSaveReport}

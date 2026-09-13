@@ -1,7 +1,7 @@
 """
-ByUs — Gemini AI Service
+FairEnough — Gemini AI Service
 
-Wraps Google Gemini 2.0 Flash for:
+Wraps Google Gemini for:
   - Dataset scenario detection
   - Plain-English bias explanation for managers
   - Multi-turn Bias Copilot chat
@@ -38,7 +38,7 @@ _model = genai.GenerativeModel("gemini-3.5-flash-lite") if (_has_genai and _api_
 
 
 class GeminiService:
-    """Stateless wrapper around the Gemini 2.0 Flash model."""
+    """Stateless wrapper around Google Gemini."""
 
     # ── Fallback Methods ──────────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ class GeminiService:
         
         # Monitoring step  
         lines.append(
-            f"Step {len(lines)+1} — Re-audit after retraining using ByUs "
+            f"Step {len(lines)+1} — Re-audit after retraining using FairEnough "
             f"to verify bias reduction. Set up quarterly fairness reviews "
             f"as part of your model governance process."
         )
@@ -345,7 +345,7 @@ class GeminiService:
         di = metrics.get("di", metrics.get("DI", 1)) or 1
         severity = metrics.get("severity", "unknown")
 
-        prompt = f"""You are ByUs AI Copilot explaining bias findings to a non-technical business manager.
+        prompt = f"""You are FairEnough AI Copilot explaining bias findings to a non-technical business manager.
 
 Context:
 - Dataset scenario: {scenario}
@@ -398,7 +398,7 @@ Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""
         
         attrs_text = "\n".join(attr_summaries)
         
-        prompt = f"""You are ByUs AI. Generate a specific 3-step action plan for this exact dataset.
+        prompt = f"""You are FairEnough AI. Generate a specific 3-step action plan for this exact dataset.
 
 Dataset scenario: {scenario}
 Bias findings:
@@ -443,7 +443,7 @@ Make each step actionable and specific to the findings above."""
                 }
             }
 
-            system_prompt = f"""You are ByUs AI Bias Copilot, an expert in AI fairness and ethics.
+            system_prompt = f"""You are FairEnough AI Bias Copilot, an expert in AI fairness and ethics.
 You have analyzed a dataset with these findings:
 {json.dumps(ctx_summary, indent=2)}
 

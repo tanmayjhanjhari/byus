@@ -95,7 +95,7 @@ export default function BiasCopilot() {
                 </div>
                 <div>
                   <h3 className="font-bold text-textPrimary text-sm">Bias Copilot</h3>
-                  <p className="text-[10px] text-textSecondary">Powered by Gemini 2.0 Flash</p>
+                  <p className="text-[10px] text-textSecondary">Powered by Google Gemini</p>
                 </div>
               </div>
               <button

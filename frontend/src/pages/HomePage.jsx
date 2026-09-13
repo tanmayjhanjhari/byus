@@ -25,7 +25,7 @@ const FEATURES = [
   {
     icon: Brain,
     title: "Explain",
-    desc: "Gemini 2.0 Flash explains bias root causes in plain English — for any audience.",
+    desc: "Gemini powered explains bias root causes in plain English — for any audience.",
     color: "text-accent2",
     bg: "bg-accent2/10",
     border: "hover:border-accent2/40",
@@ -68,7 +68,7 @@ export default function HomePage() {
           className="inline-flex items-center gap-2 bg-accent/10 border border-accent/30 text-accent text-sm font-medium px-4 py-1.5 rounded-full mb-8"
         >
           <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-          Powered by Google Gemini 2.0 Flash
+          Powered by Google Gemini
         </motion.div>
 
         {/* Word-by-word headline */}
@@ -108,7 +108,7 @@ export default function HomePage() {
           transition={{ delay: 2.2, duration: 0.6 }}
           className="text-base sm:text-lg text-textSecondary max-w-2xl mx-auto mb-10"
         >
-          Upload any dataset. ByUs surfaces hidden discrimination, explains
+          Upload any dataset. FairEnough surfaces hidden discrimination, explains
           why it exists, and helps you fix it.
         </motion.p>
 

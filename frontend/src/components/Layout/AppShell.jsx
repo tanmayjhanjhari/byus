@@ -121,8 +121,8 @@ function LearningPill() {
           className="absolute right-0 top-full mt-2 w-64 bg-surface border border-white/10 rounded-xl p-3 shadow-2xl z-50 text-xs text-textSecondary leading-relaxed"
         >
           <p className="text-textPrimary font-semibold mb-1">Auto-Learning Active</p>
-          <p>ByUs learns from every dataset analyzed.</p>
-          <p className="mt-1">Started with <span className="text-accent font-medium">20</span> research cases.</p>
+          <p>FairEnough learns from every dataset analyzed.</p>
+          <p className="mt-1">Built on foundational research benchmarks.</p>
           <p className="mt-1">
             <span className="text-accent font-medium">{stats.learned_from_uploads}</span> real-world uploads added so far.
           </p>
@@ -167,7 +167,7 @@ export default function AppShell() {
             <Scan size={18} className="text-accent" />
           </div>
           <span className="text-lg font-bold text-textPrimary">
-            By<span className="text-accent">Us</span>
+            Fair<span className="text-accent">Enough</span>
           </span>
         </Link>
 

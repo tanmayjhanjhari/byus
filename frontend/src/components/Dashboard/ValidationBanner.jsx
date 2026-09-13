@@ -92,7 +92,7 @@ export default function ValidationBanner({ validation, metricsPerAttr, auditScor
         <div className="text-xs text-textSecondary space-y-1.5">
           <p>
             <span className="font-medium text-textPrimary">Engine: </span>
-            {validation.engine === "fairlens" ? "ByUs Core (Binary)" : "Fairlearn Fallback"}
+            {validation.engine === "fairlearn_fallback" ? "Fairlearn Fallback" : "FairEnough Core"}
           </p>
 
           {warnings.length > 0 && (

@@ -1,6 +1,6 @@
-# ByUs
+# FairEnough
 
-> **Detect. Explain. Mitigate.** AI-powered bias detection for datasets and ML models using Google Gemini 2.0 Flash.
+> **Detect. Explain. Mitigate.** AI-powered bias detection for datasets and ML models powered by Google Gemini.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11-green.svg)](https://python.org)
@@ -9,12 +9,12 @@
 
 ---
 
-## What is ByUs?
+## What is FairEnough?
 
-ByUs is an open-source web platform that helps you detect, understand, and fix bias in your datasets and machine learning models. Upload your dataset (CSV, Excel, JSON, ZIP, and more), select your target variable and sensitive attributes, and ByUs will:
+FairEnough is an open-source web platform that helps you detect, understand, and fix bias in your datasets and machine learning models. Upload your dataset (CSV, Excel, JSON, ZIP, and more), select your target variable and sensitive attributes, and FairEnough will:
 
 - **Compute Industry-Standard Metrics**: Instantly calculate Statistical Parity Difference (SPD), Disparate Impact (DI), Equal Opportunity Difference (EOD), and Average Odds Difference (AOD).
-- **Deep Contextual Explanations**: Beyond numbers, ByUs provides plain-English narratives explaining *why* bias exists, including proxy feature detection and data imbalance analysis.
+- **Deep Contextual Explanations**: Beyond numbers, FairEnough provides plain-English narratives explaining *why* bias exists, including proxy feature detection and data imbalance analysis.
 - **AI-Powered Domain Detection**: Automatically identifies the dataset's scenario (Hiring, Lending, Healthcare, etc.) to tailor the analysis.
 - **Bias Mitigation Suite**: Run Reweighing and Threshold Adjustment strategies side-by-side and compare results with interactive trade-off charts.
 - **Gemini Bias Copilot**: A real-time AI assistant to answer questions about fairness metrics and provide remediation guidance.

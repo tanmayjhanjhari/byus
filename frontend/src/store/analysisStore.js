@@ -63,6 +63,7 @@ const useAnalysisStore = create((set, get) => ({
       rowCount:       meta.row_count      ?? 0,
       filename:       meta.filename       ?? "",
       preprocessingReport: meta.preprocessing_report ?? null,
+      scenario:            meta.scenario ?? meta.preprocessing_report?.detected_scenario ?? null,
       suggestedSensitive:  meta.suggested_sensitive  ?? [],
       blockedSensitive:    meta.blocked_from_sensitive ?? [],
     }),
@@ -90,6 +91,7 @@ const useAnalysisStore = create((set, get) => ({
       auditScore:      data.audit_score       ?? null,
       grade:           data.grade             ?? null,
       overallSeverity: data.overall_severity  ?? null,
+      scenario:        data.scenario          ?? get().scenario,
       validation:      data.validation        ?? get().validation,
     }),
 

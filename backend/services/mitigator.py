@@ -1,5 +1,5 @@
 """
-ByUs — Bias Mitigator Service
+FairEnough — Bias Mitigator Service
 
 Runs two mitigation strategies in parallel:
   1. Reweighing  — assigns sample weights to balance group × label frequencies

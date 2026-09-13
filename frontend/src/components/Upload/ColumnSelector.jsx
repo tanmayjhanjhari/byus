@@ -60,9 +60,25 @@ export default function ColumnSelector() {
     return store.suggestedSensitive || [];
   });
   const [scenarioLoading, setScenarioLoading] = useState(false);
-  const [scenarioData,    setScenarioData]    = useState(null);
+  const [scenarioData,    setScenarioData]    = useState(() => {
+    if (!store.scenario) return null;
+    if (typeof store.scenario === "string") {
+      return { scenario: store.scenario, confidence_pct: 95, reason: "Auto-detected from dataset features" };
+    }
+    return store.scenario;
+  });
   const [scenarioOverride, setScenarioOverride] = useState(false);
   const [analyzeLoading,  setAnalyzeLoading]  = useState(false);
+
+  useEffect(() => {
+    if (store.scenario && !scenarioData) {
+      if (typeof store.scenario === "string") {
+        setScenarioData({ scenario: store.scenario, confidence_pct: 95, reason: "Auto-detected from dataset features" });
+      } else {
+        setScenarioData(store.scenario);
+      }
+    }
+  }, [store.scenario]);
 
   // ── Scenario detect ──────────────────────────────────────────────────────
   const handleDetectScenario = async () => {
@@ -125,7 +141,7 @@ export default function ColumnSelector() {
         <div className="flex items-start gap-3 p-4 rounded-lg bg-accent/10 border border-accent/20">
           <Sparkles className="text-accent flex-shrink-0 mt-0.5" size={18} />
           <p className="text-sm text-textPrimary leading-relaxed">
-            <span className="font-semibold text-accent">ByUs detected the UCI Adult Income dataset</span> and pre-configured the analysis settings for you. Target variable is set to <code className="text-accent2 px-1 rounded bg-black/20">income_binary</code> and sensitive attributes to <code className="text-accent2 px-1 rounded bg-black/20">sex</code> and <code className="text-accent2 px-1 rounded bg-black/20">race</code>.
+            <span className="font-semibold text-accent">FairEnough detected the UCI Adult Income dataset</span> and pre-configured the analysis settings for you. Target variable is set to <code className="text-accent2 px-1 rounded bg-black/20">income_binary</code> and sensitive attributes to <code className="text-accent2 px-1 rounded bg-black/20">sex</code> and <code className="text-accent2 px-1 rounded bg-black/20">race</code>.
           </p>
         </div>
       )}
