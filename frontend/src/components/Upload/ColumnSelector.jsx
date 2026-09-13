@@ -26,10 +26,10 @@ function dtypeChip(dtype) {
   );
 }
 
-// ── Scenario chip ──────────────────────────────────────────────────────────────
-const SCENARIO_OPTIONS = ["hiring", "lending", "healthcare", "education", "other"];
+const SCENARIO_OPTIONS = ["income", "hiring", "lending", "healthcare", "education", "other"];
 
 const SCENARIO_COLORS = {
+  income:     "bg-accent/20 text-accent border-accent/30",
   hiring:     "bg-accent/20 text-accent border-accent/30",
   lending:    "bg-accent2/20 text-accent2 border-accent2/30",
   healthcare: "bg-success/20 text-success border-success/30",

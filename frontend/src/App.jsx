@@ -10,26 +10,22 @@ import ResultsPage from "./pages/ResultsPage";
 import DashboardPage from "./pages/DashboardPage";
 import ErrorBoundary from "./components/Layout/ErrorBoundary";
 
-// Page transition wrapper — applied per-route inside AnimatePresence
+// Page transition wrapper
 const PageTransition = ({ children }) => (
   <motion.div
-    initial={{ opacity: 0, y: 20 }}
+    initial={{ opacity: 0, y: 12 }}
     animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: -20 }}
-    transition={{ duration: 0.3, ease: "easeInOut" }}
+    transition={{ duration: 0.25, ease: "easeOut" }}
     style={{ flex: 1, display: "flex", flexDirection: "column" }}
   >
     {children}
   </motion.div>
 );
 
-// AnimatedRoutes reads location so AnimatePresence can detect route changes
+// AnimatedRoutes
 const AnimatedRoutes = () => {
-  const location = useLocation();
-
   return (
-    <AnimatePresence mode="wait">
-      <Routes location={location} key={location.pathname}>
+    <Routes>
         <Route
           path="/"
           element={
@@ -83,38 +79,39 @@ const AnimatedRoutes = () => {
           }
         />
       </Routes>
-    </AnimatePresence>
   );
 };
 
 export default function App() {
   return (
     <BrowserRouter>
-      {/* Toast notifications — dark themed */}
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          style: {
-            background: "#1E293B",
-            color: "#F1F5F9",
-            border: "1px solid rgba(148,163,184,0.15)",
-            fontFamily: "Space Grotesk, sans-serif",
-            fontSize: "14px",
-          },
-          success: {
-            iconTheme: { primary: "#22C55E", secondary: "#F1F5F9" },
-          },
-          error: {
-            iconTheme: { primary: "#EF4444", secondary: "#F1F5F9" },
-          },
-        }}
-      />
+      <ErrorBoundary>
+        {/* Toast notifications — dark themed */}
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            style: {
+              background: "#1E293B",
+              color: "#F1F5F9",
+              border: "1px solid rgba(148,163,184,0.15)",
+              fontFamily: "Space Grotesk, sans-serif",
+              fontSize: "14px",
+            },
+            success: {
+              iconTheme: { primary: "#22C55E", secondary: "#F1F5F9" },
+            },
+            error: {
+              iconTheme: { primary: "#EF4444", secondary: "#F1F5F9" },
+            },
+          }}
+        />
 
-      {/* App shell (navbar + step indicator) */}
-      <AppShell />
+        {/* App shell (navbar + step indicator) */}
+        <AppShell />
 
-      {/* Animated page routes */}
-      <AnimatedRoutes />
+        {/* Animated page routes */}
+        <AnimatedRoutes />
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
