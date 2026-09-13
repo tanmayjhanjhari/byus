@@ -87,15 +87,14 @@ class BiasEngine:
         audit_score_rounded = self._compute_audit_score(metrics_per_attr)
 
         # Grade and overall severity MUST come from audit_score only
-        # (never from per-attribute severities, which can contradict the score)
-        grade            = self._get_grade(audit_score_rounded)
-        overall_severity = self._get_overall_severity(audit_score_rounded)
+        grade, overall_severity, grade_label, _ = self._derive_grade_and_severity(audit_score_rounded)
 
         return {
             "metrics_per_attr": metrics_per_attr,
             "audit_score": audit_score_rounded,
             "grade": grade,
             "overall_severity": overall_severity,
+            "grade_label": grade_label,
         }
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -388,26 +387,25 @@ class BiasEngine:
     # ── Severity & Grade ──────────────────────────────────────────────────────
 
     @staticmethod
+    def _derive_grade_and_severity(audit_score: float):
+        if audit_score >= 85:
+            return "A", "low",   "Fair",           "#22C55E"
+        elif audit_score >= 70:
+            return "B", "low",   "Minor Issues",   "#84CC16"
+        elif audit_score >= 50:
+            return "C", "medium","Moderate Bias",  "#F59E0B"
+        else:
+            return "F", "high",  "High Bias",      "#EF4444"
+
+    @staticmethod
     def _get_overall_severity(audit_score: float) -> str:
         """Severity must always match the grade, derived from audit_score."""
-        if audit_score >= 70:
-            return "low"
-        elif audit_score >= 50:
-            return "medium"
-        else:
-            return "high"
+        return BiasEngine._derive_grade_and_severity(audit_score)[1]
 
     @staticmethod
     def _get_grade(audit_score: float) -> str:
         """Grade derived from audit_score."""
-        if audit_score >= 85:
-            return "A"
-        elif audit_score >= 70:
-            return "B"
-        elif audit_score >= 50:
-            return "C"
-        else:
-            return "F"
+        return BiasEngine._derive_grade_and_severity(audit_score)[0]
 
     @staticmethod
     def _severity(spd: float) -> str:

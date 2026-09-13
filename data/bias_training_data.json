@@ -391,5 +391,19 @@
     "source": "Auto:adult.data-sex",
     "auto": true,
     "timestamp": "2026-09-13T20:00:17.242463"
+  },
+  {
+    "spd": 0.1736,
+    "di": 0.3471,
+    "top_proxy_r": 0.0419,
+    "group_ratio": 0.0098,
+    "proxy_count": 0,
+    "rate_variance": 0.0744,
+    "scenario": 1,
+    "cause": "underrepresentation",
+    "severity": "high",
+    "source": "Auto:adult.data-race",
+    "auto": true,
+    "timestamp": "2026-09-13T21:10:44.948873"
   }
 ]

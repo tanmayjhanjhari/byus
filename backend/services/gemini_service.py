@@ -14,16 +14,27 @@ import os
 import re
 from typing import Any
 
-import google.generativeai as genai
-from dotenv import load_dotenv
+try:
+    import google.generativeai as genai
+    _has_genai = True
+except ImportError:
+    genai = None
+    _has_genai = False
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 _api_key = os.getenv("GEMINI_API_KEY", "")
-if _api_key:
-    genai.configure(api_key=_api_key)
+if _has_genai and _api_key:
+    try:
+        genai.configure(api_key=_api_key)
+    except Exception:
+        pass
 
-_model = genai.GenerativeModel("gemini-3.5-flash-lite")
+_model = genai.GenerativeModel("gemini-3.5-flash-lite") if (_has_genai and _api_key) else None
 
 
 class GeminiService:
@@ -271,40 +282,50 @@ class GeminiService:
             '{"scenario": string, "confidence_pct": number, "reason": string}'
         )
 
+        if not _has_genai or _model is None:
+            return self._auto_detect_scenario(columns)
+
         try:
             response = _model.generate_content(prompt)
             raw = response.text.strip()
             return self._parse_json(raw)
         except Exception as e:
-            # Rule-based scenario detection from column names
-            cols_lower = [c.lower() for c in columns]
-            # Income / census datasets — check FIRST (most specific)
-            if any(w in cols_lower for w in [
-                "income", "income_binary", "fnlwgt", "education_num",
-                "capital_gain", "capital_loss", "hours_per_week",
-                "salary", "wage", "earnings"
-            ]):
-                return {"scenario": "Income Classification",
-                        "confidence_pct": 85,
-                        "reason": "Detected income or census-related columns"}
-            elif any(w in cols_lower for w in ["loan", "credit", "approved", "default", "risk", "debt"]):
-                return {"scenario": "Lending", "confidence_pct": 80,
-                        "reason": "Detected lending-related columns"}
-            elif any(w in cols_lower for w in ["hired", "job", "occupation", "employed"]):
-                return {"scenario": "Hiring", "confidence_pct": 80,
-                        "reason": "Detected employment-related columns"}
-            elif any(w in cols_lower for w in ["diagnosis", "disease", "patient", "hospital", "medical"]):
-                return {"scenario": "Healthcare", "confidence_pct": 80,
-                        "reason": "Detected healthcare-related columns"}
-            elif any(w in cols_lower for w in ["recid", "crime", "arrest", "prison", "sentence"]):
-                return {"scenario": "Criminal Justice", "confidence_pct": 80,
-                        "reason": "Detected criminal justice columns"}
-            elif any(w in cols_lower for w in ["grade", "gpa", "score", "admit", "student"]):
-                return {"scenario": "Education", "confidence_pct": 80,
-                        "reason": "Detected education-related columns"}
-            else:
-                return {"scenario": "General Classification", "confidence_pct": 60,
-                        "reason": "Could not determine specific scenario from column names"}
+            return self._auto_detect_scenario(columns)
+
+    def _auto_detect_scenario(self, columns: list[str]) -> dict[str, Any]:
+        cols_lower = [c.lower() for c in columns]
+
+        # UCI Adult specific: fnlwgt is unique to this dataset
+        if 'fnlwgt' in cols_lower or 'fnlgt' in cols_lower:
+            return {"scenario": "income", "confidence_pct": 95,
+                    "reason": "Detected fnlwgt column — UCI Adult Census dataset"}
+
+        # General income patterns
+        if any(w in cols_lower for w in [
+            "income", "income_binary", "income_cat", "salary",
+            "wage", "earnings", "annual_income"
+        ]):
+            return {"scenario": "income", "confidence_pct": 88,
+                    "reason": "Detected income outcome column"}
+
+        if any(w in cols_lower for w in ["loan", "credit", "approved", "default", "risk", "debt"]):
+            return {"scenario": "lending", "confidence_pct": 80,
+                    "reason": "Detected lending-related columns"}
+        elif any(w in cols_lower for w in ["hired", "job", "occupation", "employed"]):
+            return {"scenario": "hiring", "confidence_pct": 80,
+                    "reason": "Detected employment-related columns"}
+        elif any(w in cols_lower for w in ["diagnosis", "disease", "patient", "hospital", "medical"]):
+            return {"scenario": "healthcare", "confidence_pct": 80,
+                    "reason": "Detected healthcare-related columns"}
+        elif any(w in cols_lower for w in ["recid", "crime", "arrest", "prison", "sentence"]):
+            return {"scenario": "criminal_justice", "confidence_pct": 80,
+                    "reason": "Detected criminal justice columns"}
+        elif any(w in cols_lower for w in ["grade", "gpa", "score", "admit", "student"]):
+            return {"scenario": "education", "confidence_pct": 80,
+                    "reason": "Detected education-related columns"}
+        else:
+            return {"scenario": "other", "confidence_pct": 60,
+                    "reason": "Could not determine specific scenario from column names"}
 
     # ── Bias explanation ──────────────────────────────────────────────────────
 

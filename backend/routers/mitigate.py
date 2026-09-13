@@ -55,6 +55,9 @@ async def mitigate(
     df: pd.DataFrame = session["df"].copy()
 
     # ── Column validation ─────────────────────────────────────────────────────
+    print(f"[Mitigate] Running mitigation for attr='{body.sensitive_attr}' "
+          f"target='{body.target_col}' session='{body.session_id}'")
+
     for col, label in [(body.target_col, "target"), (body.sensitive_attr, "sensitive attribute")]:
         if col not in df.columns:
             raise HTTPException(
@@ -99,9 +102,18 @@ async def mitigate(
     # ── Persist in session ────────────────────────────────────────────────────
     session["mitigation_results"] = mitigation_results
     session["fairlearn_results"] = fairlearn_result
-    # Store flat keys for report generator
-    session["mitigation"]     = mitigation_results
-    session["winner"]         = mitigation_results["winner"]
+
+    # Store per-attribute so report can access each one
+    if "mitigation" not in session or not isinstance(session["mitigation"], dict):
+        session["mitigation"] = {}
+    session["mitigation"][body.sensitive_attr] = mitigation_results
+
+    # Also store the last-run attribute for quick access
+    session["mitigation"]["__last_attr__"] = body.sensitive_attr
+    session["mitigation"]["winner"] = mitigation_results.get("winner")
+    session["mitigation"]["winner_reason"] = mitigation_results.get("winner_reason")
+
+    session["winner"]         = mitigation_results.get("winner")
     session["winner_reason"]  = mitigation_results.get("winner_reason", "")
 
     # ── Build response ────────────────────────────────────────────────────────

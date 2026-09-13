@@ -94,11 +94,15 @@ async def upload_csv(
     )
 
     # ── Persist in session store ──────────────────────────────────────────────
-    request.app.state.sessions[session_id] = {
+    session_dict = {
         "df": df,
         "filename": file.filename or "upload.csv",
         "row_count": row_count,
+        "preprocessing_report": report,
     }
+    if report.get("detected_scenario"):
+        session_dict["scenario"] = report["detected_scenario"]
+    request.app.state.sessions[session_id] = session_dict
 
     NEVER_SENSITIVE = [
         "decile_score", "decile_score1", "score_text", "v_decile_score",
@@ -201,11 +205,15 @@ async def load_sample_dataset(request: Request, dataset_id: str):
     preview = df.head(5).where(pd.notna(df.head(5)), other=None).to_dict(orient="records")
 
     # ── Persist in session store ──────────────────────────────────────────────
-    request.app.state.sessions[session_id] = {
+    session_dict = {
         "df": df,
         "filename": dataset["filename"],
         "row_count": row_count,
+        "preprocessing_report": report,
     }
+    if report.get("detected_scenario"):
+        session_dict["scenario"] = report["detected_scenario"]
+    request.app.state.sessions[session_id] = session_dict
 
     NEVER_SENSITIVE = [
         "decile_score", "decile_score1", "score_text", "v_decile_score",
