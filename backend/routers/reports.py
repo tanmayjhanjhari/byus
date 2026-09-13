@@ -1,13 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from datetime import datetime
+from fastapi.responses import StreamingResponse
+from datetime import datetime, timezone
 from bson import ObjectId
 from typing import Optional
+import io
 import json
 from database import get_db
 from routers.auth import require_user, get_current_user
 from services.auth_service import serialize_doc
+from services.reporter import ReportGenerator
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
+_reporter = ReportGenerator()
 
 @router.post("/save")
 async def save_report(
@@ -200,3 +204,66 @@ async def delete_report(
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Report not found.")
     return {"message": "Report deleted."}
+
+
+@router.get("/pdf/{report_id}")
+async def download_saved_pdf(
+    report_id: str,
+    user: dict = Depends(require_user)
+):
+    """Regenerate a PDF from a saved report's stored metrics — no in-memory session needed."""
+    db = get_db()
+    try:
+        doc = await db.reports.find_one({
+            "_id": ObjectId(report_id),
+            "user_id": ObjectId(user["id"])
+        })
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid report ID.")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Report not found.")
+
+    # Reconstruct a session_data-like dict from stored DB fields
+    full_metrics = doc.get("full_metrics") or {}
+    mitigation   = doc.get("mitigation_results") or {}
+    pattern_preds = doc.get("pattern_predictions") or {}
+
+    session_data = {
+        "filename":         doc.get("filename", "Unknown"),
+        "row_count":        doc.get("row_count", 0),
+        "target_col":       doc.get("target_col", ""),
+        "sensitive_attrs":  doc.get("sensitive_attrs", []),
+        "scenario":         doc.get("scenario", "Other"),
+        "audit_score":      doc.get("audit_score", 0),
+        "grade":            doc.get("grade", "F"),
+        "overall_severity": doc.get("overall_severity", "low"),
+        "bias_results": {
+            "audit_score":      doc.get("audit_score", 0),
+            "grade":            doc.get("grade", "F"),
+            "overall_severity": doc.get("overall_severity", "low"),
+            "metrics_per_attr": full_metrics,
+        },
+        "mitigation":       mitigation,
+        "mitigation_results": mitigation,
+        "pattern_predictions": pattern_preds,
+    }
+
+    try:
+        pdf_bytes: bytes = _reporter.generate(session_data=session_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"PDF generation failed: {exc}"
+        )
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename  = f"fairenough_audit_{report_id[:8]}_{timestamp}.pdf"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )

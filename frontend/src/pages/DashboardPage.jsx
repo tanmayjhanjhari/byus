@@ -97,19 +97,19 @@ export default function DashboardPage() {
     }
   };
 
-  // PDF generation downloader
-  const handleDownloadPDF = async (sessionId) => {
-    if (!sessionId) return;
+  // PDF generation downloader — uses stored DB report (no session needed)
+  const handleDownloadPDF = async (reportId) => {
+    if (!reportId) return;
     setDownloading(true);
     try {
-      const response = await client.get(`/api/report/${sessionId}`, {
+      const response = await client.get(`/api/reports/pdf/${reportId}`, {
         responseType: 'blob',
         timeout: 120000
       });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `fairenough-audit-${sessionId.substring(0,8)}.pdf`);
+      link.setAttribute('download', `fairenough-audit-${reportId.substring(0,8)}.pdf`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -560,7 +560,7 @@ export default function DashboardPage() {
                   {/* Actions Drawer Footer */}
                   <div className="flex gap-3 pt-6 border-t border-white/[0.08] mt-8 flex-shrink-0">
                     <button
-                      onClick={() => handleDownloadPDF(selectedReport.session_id)}
+                      onClick={() => handleDownloadPDF(selectedReport.id)}
                       disabled={downloading}
                       className="flex-1 bg-accent hover:bg-accentLight text-primary font-semibold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
                     >
