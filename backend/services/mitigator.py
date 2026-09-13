@@ -752,104 +752,85 @@ class BiasMitigator:
 
     # ── Feature preparation ───────────────────────────────────────────────────
 
-    def _prepare_features(
-        self,
-        df_work: pd.DataFrame,
-        target_col: str,
-        sensitive_attr: str,
-    ) -> tuple[np.ndarray, list]:
-        """
-        Return (X, feature_cols) where X encodes ALL columns
-        (numeric + categorical) excluding target, sensitive attr,
-        and any columns that leak information about the target.
-        """
+    def _prepare_features(self, df_work, target_col, sensitive_attr):
         import numpy as np
         from sklearn.preprocessing import LabelEncoder
 
-        # Step 1: Build exclusion list
+        # Build base exclusion set
         exclude = {
             target_col, sensitive_attr,
             '__target__', '__sens__', '__y__', '__s__'
         }
 
-        # Step 2: Auto-detect leaking columns BEFORE selecting features
-        # Use __target__ if binarized version exists, else fall back to target_col
-        y_col = '__target__' if '__target__' in df_work.columns else target_col
-        try:
-            y_vals = df_work[y_col].astype(float)
-        except Exception:
-            y_vals = None
+        # Detect leaking columns by correlation with target
+        y_vals = None
+        for y_candidate in ['__target__', target_col]:
+            if y_candidate in df_work.columns:
+                try:
+                    y_vals = df_work[y_candidate].astype(float)
+                    break
+                except Exception:
+                    pass
 
-        leaking_cols = set()
+        leaking = set()
         if y_vals is not None:
             for col in df_work.columns:
                 if col in exclude:
                     continue
                 try:
-                    col_data = df_work[col]
-                    if col_data.dtype.kind in ('i', 'f'):  # numeric
-                        corr = abs(float(col_data.corr(y_vals)))
-                        if corr > 0.95:
-                            leaking_cols.add(col)
-                            print(f"[Mitigator] LEAKAGE DETECTED: '{col}' "
-                                  f"corr={corr:.3f} with target — excluded")
+                    if df_work[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+                        corr = abs(float(df_work[col].corr(y_vals)))
                     else:
-                        # Categorical: check encoded correlation
-                        col_encoded = LabelEncoder().fit_transform(
-                            col_data.fillna('missing').astype(str))
-                        corr = abs(float(np.corrcoef(
-                            col_encoded, y_vals.values)[0, 1]))
-                        if corr > 0.95:
-                            leaking_cols.add(col)
-                            print(f"[Mitigator] LEAKAGE DETECTED: '{col}' "
-                                  f"corr={corr:.3f} with target — excluded")
+                        enc = LabelEncoder().fit_transform(
+                            df_work[col].fillna('missing').astype(str))
+                        corr = abs(float(np.corrcoef(enc, y_vals)[0, 1]))
+                    if corr > 0.90:
+                        leaking.add(col)
+                        print(f"[Mitigator] LEAKAGE '{col}' corr={corr:.3f} EXCLUDED")
                 except Exception:
-                    pass  # Keep column if check fails
+                    pass
 
-        # Step 3: Name-based leakage — e.g. target='income_binary' → exclude 'income'
+        # Name-based leakage: e.g. target='income_binary' → exclude 'income'
         target_base = (target_col
-                       .replace('_binary', '')
-                       .replace('_encoded', '')
-                       .replace('_label', '')
-                       .replace('_num', '')
-                       .lower())
+                       .replace('_binary', '').replace('_encoded', '')
+                       .replace('_label', '').replace('_num', '').lower())
         for col in df_work.columns:
-            col_lower = col.lower()
-            if col in exclude or col in leaking_cols:
+            if col in exclude or col in leaking:
                 continue
-            if target_base in col_lower and col_lower != target_col.lower():
-                leaking_cols.add(col)
-                print(f"[Mitigator] NAME-BASED LEAKAGE: '{col}' "
-                      f"excluded (derived from '{target_col}')")
+            if (target_base in col.lower() and col.lower() != target_col.lower()):
+                leaking.add(col)
+                print(f"[Mitigator] NAME LEAKAGE '{col}' excluded")
 
-        all_exclude = exclude | leaking_cols
+        # Also exclude the original target variants
+        for col in df_work.columns:
+            if col in exclude or col in leaking:
+                continue
+            col_lower = col.lower()
+            if col_lower in ['income', 'salary', 'label', 'target', 'outcome',
+                              'result', 'class', 'prediction', 'score']:
+                if col_lower != target_col.lower():
+                    leaking.add(col)
+                    print(f"[Mitigator] KEYWORD LEAKAGE '{col}' excluded")
 
-        # Step 4: Select clean feature columns
+        all_exclude = exclude | leaking
         feature_cols = [c for c in df_work.columns if c not in all_exclude]
 
         if not feature_cols:
             raise ValueError(
-                f"No valid features found after excluding target, sensitive attr, "
-                f"and {len(leaking_cols)} leaking column(s): {leaking_cols}. "
-                f"Check your dataset — the target column may have a near-duplicate "
-                f"column in the data."
+                f"No valid features after excluding target, sensitive attr, "
+                f"and {len(leaking)} leaking columns: {leaking}"
             )
 
-        # Step 5: Encode all columns
         X_parts = []
         for col in feature_cols:
             col_data = df_work[col].copy()
-            if col_data.dtype.kind in ('i', 'f'):
+            if col_data.dtype in ['int64', 'float64', 'int32', 'float32']:
                 filled = col_data.fillna(col_data.median())
                 X_parts.append(filled.values.reshape(-1, 1).astype(float))
             else:
                 le = LabelEncoder()
-                filled = col_data.fillna('missing').astype(str)
-                encoded = le.fit_transform(filled)
+                encoded = le.fit_transform(col_data.fillna('missing').astype(str))
                 X_parts.append(encoded.reshape(-1, 1).astype(float))
-
-        if not X_parts:
-            raise ValueError("No features found after encoding.")
 
         return np.hstack(X_parts), feature_cols
 

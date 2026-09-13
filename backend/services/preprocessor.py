@@ -65,6 +65,8 @@ class DataPreprocessor:
         # Step 8: UCI Adult Specific Fix
         df, uci_detected = self._uci_adult_fix(df, filename)
         report["uci_adult_detected"] = uci_detected
+        if uci_detected:
+            report["detected_scenario"] = "income"
 
         # New Step: ID Columns
         id_cols = self._detect_id_columns(df)

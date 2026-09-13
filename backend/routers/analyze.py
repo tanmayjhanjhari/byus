@@ -73,6 +73,11 @@ async def analyze(
     session = sessions[body.session_id]
     df: pd.DataFrame = session["df"].copy()
 
+    # If detected_scenario is present in preprocessing_report, set session["scenario"]
+    preprocessing_report = session.get("preprocessing_report", {})
+    if preprocessing_report.get("detected_scenario"):
+        session["scenario"] = preprocessing_report["detected_scenario"]
+
     # ── Basic column existence checks ─────────────────────────────────────────
     if body.target_col not in df.columns:
         raise HTTPException(
@@ -187,6 +192,7 @@ async def analyze(
     session["audit_score"]      = bias_results["audit_score"]
     session["overall_severity"] = bias_results["overall_severity"]
     session["grade"]            = bias_results["grade"]
+    session["grade_label"]      = bias_results.get("grade_label", "")
     session["metrics_per_attr"] = bias_results["metrics_per_attr"]
 
     # ── 6. Build response ─────────────────────────────────────────────────────
@@ -197,6 +203,7 @@ async def analyze(
         "audit_score": bias_results["audit_score"],
         "grade": bias_results["grade"],
         "overall_severity": bias_results["overall_severity"],
+        "grade_label": bias_results.get("grade_label", ""),
         "model_used": model_used,
     }
 
