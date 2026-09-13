@@ -201,11 +201,34 @@ async def analyze(
         metrics_per_attr = bias_results.get("metrics_per_attr", {})
 
         pattern_predictions = {}
+        # Severity ordering for comparison
+        _SEV_RANK = {"low": 0, "medium": 1, "high": 2}
 
         for attr, m in metrics_per_attr.items():
+            if "error" in m:
+                continue
+
             spd         = abs(m.get("SPD", 0) or 0)
             di          = m.get("DI", 1.0) or 1.0
+
+            # Compute proxy correlations from the dataframe if not in engine output
             proxies     = m.get("proxy_features", [])
+            if not proxies and attr in df.columns:
+                feature_cols = [
+                    c for c in df.select_dtypes(include="number").columns
+                    if c not in [attr, body.target_col, "__predictions__"]
+                ]
+                if body.target_col in df.columns:
+                    try:
+                        attr_encoded = pd.Categorical(df[attr].astype(str)).codes
+                        for fc in feature_cols[:10]:  # top 10 numeric features
+                            r = abs(float(df[fc].corr(pd.Series(attr_encoded, index=df.index))))
+                            if not np.isnan(r):
+                                proxies.append({"feature": fc, "correlation": round(r, 4)})
+                        proxies.sort(key=lambda x: -x["correlation"])
+                    except Exception:
+                        pass
+
             top_proxy_r = proxies[0].get("correlation", 0.0) if proxies else 0.0
             proxy_count = sum(1 for p in proxies if p.get("correlation", 0) > 0.2)
             group_stats = m.get("group_stats", {})
@@ -214,12 +237,34 @@ async def analyze(
             counts      = [g.get("count", 1) for g in group_stats.values()]
             group_ratio = (min(counts) / max(counts)) if counts and max(counts) > 0 else 1.0
 
-            # Get prediction for this attribute
+            # Get ML prediction for this attribute
             pred = classifier.predict(
                 spd, di, top_proxy_r, group_ratio,
                 proxy_count, rate_var, scenario
             )
             pattern_predictions[attr] = pred
+
+            # ── Real impact: merge classifier output into the metric ──────────
+            # Override per-attribute severity if ML has high confidence
+            classifier_sev  = pred.get("predicted_severity", "")
+            classifier_conf = pred.get("severity_confidence", 0)
+            engine_sev      = m.get("severity", "low")
+
+            if classifier_conf >= 70 and classifier_sev in _SEV_RANK:
+                # Take the *higher* of engine severity and ML severity
+                if _SEV_RANK.get(classifier_sev, 0) > _SEV_RANK.get(engine_sev, 0):
+                    m["severity"] = classifier_sev
+                    m["severity_source"] = "ml_classifier"
+                else:
+                    m["severity_source"] = "bias_engine"
+            else:
+                m["severity_source"] = "bias_engine"
+
+            # Attach ML cause label to the metric (visible in API response)
+            m["predicted_cause"]       = pred.get("predicted_cause", "")
+            m["cause_label"]           = pred.get("cause_label", "")
+            m["classifier_confidence"] = pred.get("confidence_pct", 0)
+            m["proxy_features"]        = proxies  # computed proxies available downstream
 
             # Auto-learn in background — never blocks the API response
             t = threading.Thread(
@@ -231,10 +276,26 @@ async def analyze(
             )
             t.start()
 
+        # Recompute overall_severity from updated per-attr severities
+        updated_severities = [
+            m.get("severity", "low")
+            for m in metrics_per_attr.values()
+            if isinstance(m, dict) and "severity" in m and "error" not in m
+        ]
+        if updated_severities:
+            if "high" in updated_severities:
+                updated_overall = "high"
+            elif "medium" in updated_severities:
+                updated_overall = "medium"
+            else:
+                updated_overall = "low"
+            results["overall_severity"] = updated_overall
+
         # Store predictions in session so mitigator can use them
         session["pattern_predictions"] = pattern_predictions
 
-        # Add to API response
+        # Re-serialise metrics_per_attr since we mutated it in-place
+        results["metrics_per_attr"] = _serialise(metrics_per_attr)
         results["pattern_predictions"] = pattern_predictions
 
     except Exception as e:

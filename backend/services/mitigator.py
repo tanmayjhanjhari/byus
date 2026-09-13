@@ -68,7 +68,7 @@ class BiasMitigator:
         # Select numeric features
         feature_cols = [c for c in df_clean.columns
                         if c not in [target_col, sensitive_attr, '__target__', '__sens__']
-                        and df_clean[c].dtype in ['int64', 'float64']]
+                        and pd.api.types.is_numeric_dtype(df_clean[c])]
         if not feature_cols:
             raise ValueError("No numeric feature columns found for mitigation.")
         
@@ -492,10 +492,12 @@ class BiasMitigator:
                     y_adj[s_test == g0] = (proba[s_test == g0] >= t0).astype(int)
                     y_adj[s_test == g1] = (proba[s_test == g1] >= t1).astype(int)
 
-                    # Skip if recall collapses to 0 for any group
+                    # Skip if recall collapses to 0 for any group with positive examples
+                    has_pos0 = (y_test[s_test == g0] == 1).sum() > 0
+                    has_pos1 = (y_test[s_test == g1] == 1).sum() > 0
                     rec0 = recall_score(y_test[s_test == g0], y_adj[s_test == g0], zero_division=0)
                     rec1 = recall_score(y_test[s_test == g1], y_adj[s_test == g1], zero_division=0)
-                    if rec0 < 0.05 or rec1 < 0.05:
+                    if (has_pos0 and rec0 < 0.05) or (has_pos1 and rec1 < 0.05):
                         continue
 
                     spd = abs(self._compute_spd(y_adj, s_test))

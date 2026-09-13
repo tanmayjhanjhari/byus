@@ -2,6 +2,7 @@ import numpy as np
 import json
 import os
 import threading
+from pathlib import Path
 from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 
@@ -29,9 +30,14 @@ CAUSE_LABELS = {
     "none": "No significant bias pattern detected. The dataset appears fair."
 }
 
-TRAINING_FILE = os.path.join(
-    os.path.dirname(__file__), '../../data/bias_training_data.json'
-)
+# Absolute path so the file is found regardless of where uvicorn/gunicorn
+# is launched from (project root, backend/, Railway, Vercel sidecars, etc.)
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, '..', '..'))
+TRAINING_FILE = os.path.join(_PROJECT_ROOT, 'data', 'bias_training_data.json')
+
+# Print on module load so you can verify in terminal
+print(f"[BiasPatternClassifier] Training data path: {TRAINING_FILE}")
 
 SEED_DATA = [
     {"spd":0.196,"di":0.358,"top_proxy_r":0.58,"group_ratio":0.49,"proxy_count":1,"rate_variance":0.045,"scenario":4,"cause":"proxy","severity":"high","source":"UCI Adult - gender","auto":False},
@@ -93,15 +99,31 @@ class BiasPatternClassifier:
         self._retrain()
 
     def _load_or_init(self):
-        os.makedirs(os.path.dirname(TRAINING_FILE), exist_ok=True)
+        # Ensure the data directory exists (important on fresh deployments)
+        data_dir = os.path.dirname(TRAINING_FILE)
+        os.makedirs(data_dir, exist_ok=True)
+        print(f"[BiasPatternClassifier] Data directory: {data_dir}")
+
         if os.path.exists(TRAINING_FILE):
-            with open(TRAINING_FILE, 'r') as f:
-                self.training_data = json.load(f)
-            print(f"[BiasPatternClassifier] Loaded {len(self.training_data)} examples from disk")
+            try:
+                with open(TRAINING_FILE, 'r') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list) and len(loaded) >= len(SEED_DATA):
+                    self.training_data = loaded
+                    print(f"[BiasPatternClassifier] Loaded {len(self.training_data)} examples from disk")
+                else:
+                    # File corrupt or too small — reinitialise
+                    print(f"[BiasPatternClassifier] Stale/corrupt file, reinitialising")
+                    self.training_data = list(SEED_DATA)
+                    self._save()
+            except (json.JSONDecodeError, ValueError) as exc:
+                print(f"[BiasPatternClassifier] JSON parse error ({exc}), reinitialising")
+                self.training_data = list(SEED_DATA)
+                self._save()
         else:
             self.training_data = list(SEED_DATA)
             self._save()
-            print(f"[BiasPatternClassifier] Initialized with {len(self.training_data)} seed examples")
+            print(f"[BiasPatternClassifier] Initialised with {len(self.training_data)} seed examples")
 
     def _save(self):
         with open(TRAINING_FILE, 'w') as f:

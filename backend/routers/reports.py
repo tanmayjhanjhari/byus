@@ -180,7 +180,7 @@ async def get_summary(user: dict = Depends(require_user)):
 
     return {
         "total_analyses":       total,
-        "avg_audit_score":      round(stats.get("avg_score", 0), 1),
+        "avg_audit_score":      round(stats.get("avg_score") or 0, 1),
         "most_common_bias_cause": most_common_cause,
         "scenarios_analyzed":   scenarios,
         "recent_reports":       recent,

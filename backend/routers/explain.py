@@ -99,6 +99,9 @@ async def explain(
     )
     
     explanation["gemini_explanation"] = gemini_explanation
+    pattern_preds = session.get("pattern_predictions", {})
+    if body.sensitive_attr in pattern_preds:
+        explanation["pattern_prediction"] = pattern_preds[body.sensitive_attr]
 
     # ── Persist in session (keyed by attribute for multi-attr support) ────────
     if "explanations" not in session:
