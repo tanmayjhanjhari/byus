@@ -10,6 +10,7 @@ POST /api/analyze
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import numpy as np
@@ -19,6 +20,12 @@ from pydantic import BaseModel, Field
 
 from services.validator import DataValidator
 from services.bias_engine import BiasEngine
+
+# Import TRAINING_FILE path for learning-stats endpoint
+try:
+    from services.bias_pattern_model import TRAINING_FILE
+except ImportError:
+    TRAINING_FILE = ""
 
 router = APIRouter(tags=["Analysis"])
 
@@ -316,12 +323,25 @@ async def analyze(
 async def learning_stats() -> dict:
     """
     Return statistics about the BiasPatternClassifier's training data.
-    Shows how many examples have been learned from real uploads vs seed data.
+    Reads from the JSON file first so the count is never 0 after a restart.
     """
-    from services.bias_pattern_model import get_bias_pattern_classifier
-    classifier = get_bias_pattern_classifier()
-    return classifier.get_stats()
+    from services.bias_pattern_model import get_bias_pattern_classifier, get_stats_from_file
 
+    # Read from file first -- never returns 0 after restart
+    stats = get_stats_from_file()
+
+    # Try live classifier -- use whichever has more examples
+    try:
+        clf = get_bias_pattern_classifier()
+        live = clf.get_stats()
+        if live.get("total_examples", 0) >= stats.get("total_examples", 0):
+            stats = live
+            stats["file_path"]  = TRAINING_FILE
+            stats["file_exists"] = os.path.exists(TRAINING_FILE)
+    except Exception as e:
+        stats["classifier_error"] = str(e)
+
+    return stats
 
 
 def _find_model(

@@ -23,7 +23,26 @@ async def lifespan(app: FastAPI):
     # Initialise in-memory session store on startup
     app.state.sessions = {}
     await connect_db()
-    os.makedirs("data", exist_ok=True)
+
+    # Ensure data directory always exists (Railway, Docker, local dev)
+    import os as _os
+    _os.makedirs(_os.path.join(_os.getcwd(), 'data'), exist_ok=True)
+    _os.makedirs('data', exist_ok=True)
+
+    # Verify classifier loads correctly
+    try:
+        from services.bias_pattern_model import get_bias_pattern_classifier, get_stats_from_file
+        clf   = get_bias_pattern_classifier()
+        stats = get_stats_from_file()
+        print(f"[Startup] BiasPatternClassifier: {stats['total_examples']} examples")
+        print(f"[Startup] File: {stats['file_path']}")
+        print(f"[Startup] File exists: {stats['file_exists']}")
+        if stats['total_examples'] < 20:
+            print("[Startup] WARNING: Less than 20 training examples. "
+                  "Run: python backend/scripts/train_classifier.py")
+    except Exception as e:
+        print(f"[Startup] BiasPatternClassifier error: {e}")
+
     yield
     await disconnect_db()
 

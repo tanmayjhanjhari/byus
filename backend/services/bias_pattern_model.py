@@ -102,7 +102,8 @@ class BiasPatternClassifier:
         # Ensure the data directory exists (important on fresh deployments)
         data_dir = os.path.dirname(TRAINING_FILE)
         os.makedirs(data_dir, exist_ok=True)
-        print(f"[BiasPatternClassifier] Data directory: {data_dir}")
+        print(f"[BiasPatternClassifier] Data path: {TRAINING_FILE}")
+        print(f"[BiasPatternClassifier] File exists: {os.path.exists(TRAINING_FILE)}")
 
         if os.path.exists(TRAINING_FILE):
             try:
@@ -262,3 +263,38 @@ def get_bias_pattern_classifier() -> BiasPatternClassifier:
     if _classifier is None:
         _classifier = BiasPatternClassifier()
     return _classifier
+
+
+def get_stats_from_file() -> dict:
+    """
+    Read training statistics directly from the JSON file without needing the
+    singleton classifier.  This means the count is correct even immediately
+    after a backend restart (before the classifier singleton is initialised).
+    """
+    try:
+        if os.path.exists(TRAINING_FILE):
+            with open(TRAINING_FILE) as f:
+                data = json.load(f)
+            auto = sum(1 for d in data if d.get('auto', False))
+            causes: dict = {}
+            for d in data:
+                c = d.get('cause', 'unknown')
+                causes[c] = causes.get(c, 0) + 1
+            return {
+                "total_examples":       len(data),
+                "seed_examples":        len(data) - auto,
+                "learned_from_uploads": auto,
+                "cause_distribution":   causes,
+                "file_path":            TRAINING_FILE,
+                "file_exists":          True,
+            }
+    except Exception as e:
+        print(f"[BiasPatternClassifier] Stats read error: {e}")
+    return {
+        "total_examples":       0,
+        "seed_examples":        0,
+        "learned_from_uploads": 0,
+        "cause_distribution":   {},
+        "file_path":            TRAINING_FILE,
+        "file_exists":          False,
+    }
