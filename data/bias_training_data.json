@@ -377,5 +377,19 @@
     "severity": "high",
     "source": "UCI Adult - race",
     "auto": true
+  },
+  {
+    "spd": 0.1963,
+    "di": 0.3583,
+    "top_proxy_r": 0.2292,
+    "group_ratio": 0.4943,
+    "proxy_count": 1,
+    "rate_variance": 0.0982,
+    "scenario": 1,
+    "cause": "historical_skew",
+    "severity": "high",
+    "source": "Auto:adult.data-sex",
+    "auto": true,
+    "timestamp": "2026-09-13T20:00:17.242463"
   }
 ]
