@@ -87,6 +87,16 @@ export default function BeforeAfterChart({ mitigation }) {
           </p>
         </div>
       )}
+
+      <div className="mt-3 flex items-start gap-2 bg-amber-500/8 border border-amber-500/20 rounded-lg px-3 py-2">
+        <Info size={13} className="text-amber-400/70 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-300/70 leading-relaxed">
+          <span className="font-semibold">Simulation note:</span> EOD and AOD values in this chart
+          are computed by an internal GradientBoosting simulation model trained on your dataset to demonstrate
+          what mitigation would achieve. They are not measurements from your original dataset analysis.
+          SPD and DI shown here are real measurements from the simulated mitigated model.
+        </p>
+      </div>
     </div>
   );
 }

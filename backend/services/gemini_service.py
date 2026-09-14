@@ -345,21 +345,32 @@ class GeminiService:
         di = metrics.get("di", metrics.get("DI", 1)) or 1
         severity = metrics.get("severity", "unknown")
 
+        metrics_mode = metrics.get("metrics_mode", "dataset_level")
+        eod_val = metrics.get("EOD") if metrics.get("EOD") is not None else metrics.get("eod")
+        aod_val = metrics.get("AOD") if metrics.get("AOD") is not None else metrics.get("aod")
+        eod_line = (f"EOD = {eod_val:.3f} (Equal Opportunity Difference)" if eod_val is not None else "EOD = Not available (requires model predictions)")
+        aod_line = (f"AOD = {aod_val:.3f} (Average Odds Difference)" if aod_val is not None else "AOD = Not available (requires model predictions)")
+        analysis_type = ("Dataset-level analysis (outcome distributions only, no model predictions)" if metrics_mode == "dataset_level" else "Model-level analysis (model predictions provided)")
+
         prompt = f"""You are FairEnough AI Copilot explaining bias findings to a non-technical business manager.
 
 Context:
 - Dataset scenario: {scenario}
+- Analysis type: {analysis_type}
 - Sensitive attribute: '{sensitive_attr}'
-- SPD = {metrics.get('SPD', 'N/A')} (outcome gap between groups)
-- DI = {metrics.get('DI', 'N/A')} (ratio of positive outcomes, legal threshold is 0.8)
+- SPD = {metrics.get('SPD', 'N/A')} (outcome gap between groups - REAL measurement from actual data)
+- DI = {metrics.get('DI', 'N/A')} (ratio of positive outcomes, legal threshold is 0.8 - REAL measurement)
+- {eod_line}
+- {aod_line}
 - Severity: {metrics.get('severity', 'unknown')}
 - Top proxy feature: {plain_reason}
 
 Write 3 SHORT paragraphs. Each paragraph max 2 sentences. Use plain English.
-Paragraph 1: What this bias MEANS in the real world for this specific scenario (hiring/lending/healthcare etc). Be specific, not generic.
-Paragraph 2: WHY it likely exists — explain the historical or societal reason, not just the math.
+Paragraph 1: What this DATASET bias MEANS in the real world for this specific scenario. Focus on outcome gaps between groups. Be specific, not generic.
+Paragraph 2: WHY it likely exists - explain the historical or societal reason, not just the math.
 Paragraph 3: What HARM it causes to real people if not fixed. Give a concrete example.
 
+IMPORTANT: If analysis is dataset-level, do NOT mention 'the model'. Say 'the data shows' or 'the outcomes in this dataset show'. SPD and DI are real measurements from actual outcomes.
 Do NOT repeat the proxy feature statistics already shown above.
 Do NOT use technical jargon like SPD, DI, EOD, AOD, logistic regression.
 Do NOT start with 'Sure' or 'Certainly' or 'Of course'."""

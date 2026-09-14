@@ -1,5 +1,5 @@
-"""
-FairEnough — Bias Explainer Service
+﻿"""
+FairEnough â€” Bias Explainer Service
 
 Analyses *why* bias exists in a dataset:
   - Correlation between the sensitive attribute and target
@@ -48,13 +48,13 @@ class BiasExplainer:
         """
         work = df.copy().dropna(subset=[target_col, sensitive_attr])
 
-        # ── 1. Correlation: sensitive_attr ↔ target ───────────────────────────
+        # â”€â”€ 1. Correlation: sensitive_attr â†” target â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         correlation = self._correlation(work, sensitive_attr, target_col)
 
-        # ── 2. Proxy features ─────────────────────────────────────────────────
+        # â”€â”€ 2. Proxy features â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         proxy_features = self._proxy_features(work, target_col, sensitive_attr)
 
-        # ── 3. Data imbalance ─────────────────────────────────────────────────
+        # â”€â”€ 3. Data imbalance â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         group_counts = work[sensitive_attr].value_counts()
         smallest = int(group_counts.min())
         largest = int(group_counts.max())
@@ -74,7 +74,7 @@ class BiasExplainer:
             ),
         }
 
-        # ── 4. Historical skew (std of positive rates across groups) ──────────
+        # â”€â”€ 4. Historical skew (std of positive rates across groups) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         positive_rates = (
             work.groupby(sensitive_attr)[target_col]
             .mean()
@@ -82,12 +82,12 @@ class BiasExplainer:
         )
         historical_skew = round(float(positive_rates.std()), 4) if len(positive_rates) > 1 else 0.0
 
-        # ── 5. Positive rate gap ──────────────────────────────────────────────
+        # â”€â”€ 5. Positive rate gap â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         positive_rate_gap = round(
             float(positive_rates.max() - positive_rates.min()), 4
         ) if len(positive_rates) > 1 else 0.0
 
-        # ── 6. Plain-English reason ───────────────────────────────────────────
+        # â”€â”€ 6. Plain-English reason â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         plain_reason = self._build_plain_reason(
             sensitive_attr=sensitive_attr,
             target_col=target_col,
@@ -125,12 +125,12 @@ class BiasExplainer:
         size_ratio = round(worst_count / max(best_count, 1), 2)
         is_imbalanced = size_ratio < 0.5
 
-        # Build spd_explanation — plain English reason WHY spd is this number
+        # Build spd_explanation â€” plain English reason WHY spd is this number
         if spd_val < 0.05:
             spd_explanation = (
                 f"SPD of {spd_val:.3f} is very close to 0, which means nearly ideal "
                 f"fairness for '{sensitive_attr}'. The outcome rates across groups are "
-                f"almost identical — this could mean the model genuinely treats groups "
+                f"almost identical â€” this could mean the model genuinely treats groups "
                 f"equally, OR that everyone is getting the same outcome regardless of "
                 f"group (e.g. nearly everyone approved), which can mask real-world "
                 f"discrimination hidden in other ways."
@@ -139,7 +139,7 @@ class BiasExplainer:
             spd_explanation = (
                 f"SPD of {spd_val:.3f} shows a small but real gap. "
                 f"'{best_group_name}' gets positive outcomes {best_rate:.0%} of the time "
-                f"vs {worst_rate:.0%} for '{worst_group_name}' — a {gap_pct}% difference. "
+                f"vs {worst_rate:.0%} for '{worst_group_name}' â€” a {gap_pct}% difference. "
                 f"While below the high-severity threshold, this gap affects real people "
                 f"and should be monitored."
             )
@@ -147,7 +147,7 @@ class BiasExplainer:
             spd_explanation = (
                 f"SPD of {spd_val:.3f} shows medium bias. "
                 f"'{best_group_name}' receives positive outcomes {best_rate:.0%} of the time "
-                f"compared to only {worst_rate:.0%} for '{worst_group_name}' — "
+                f"compared to only {worst_rate:.0%} for '{worst_group_name}' â€” "
                 f"a {gap_pct} percentage point gap. In practical terms, for every 100 "
                 f"people from '{worst_group_name}', approximately {round(gap_pct)} fewer "
                 f"receive a positive outcome compared to '{best_group_name}'."
@@ -156,7 +156,7 @@ class BiasExplainer:
             spd_explanation = (
                 f"SPD of {spd_val:.3f} indicates HIGH bias. "
                 f"'{best_group_name}' gets positive outcomes {best_rate:.0%} of the time "
-                f"while '{worst_group_name}' gets them only {worst_rate:.0%} of the time — "
+                f"while '{worst_group_name}' gets them only {worst_rate:.0%} of the time â€” "
                 f"a {gap_pct} percentage point difference. This means for every 100 "
                 f"people from '{worst_group_name}', roughly {round(gap_pct)} of them miss "
                 f"out on positive outcomes purely based on their group membership."
@@ -167,7 +167,7 @@ class BiasExplainer:
         if di_val >= 0.8:
             di_explanation = (
                 f"Disparate Impact of {di_val:.3f} is above the legal 0.8 threshold. "
-                f"The ratio of positive outcome rates ({worst_rate:.0%} ÷ {best_rate:.0%}) "
+                f"The ratio of positive outcome rates ({worst_rate:.0%} Ã· {best_rate:.0%}) "
                 f"meets the legal '80% rule' used in employment and lending regulation. "
                 f"However, passing this threshold does not mean no bias exists."
             )
@@ -196,10 +196,10 @@ class BiasExplainer:
             ceiling_effect = True
             ceiling_explanation = (
                 f"Important caveat: '{best_group_name}' already has a {best_rate:.0%} "
-                f"approval rate — nearly everyone gets approved. When approval rates are "
+                f"approval rate â€” nearly everyone gets approved. When approval rates are "
                 f"this high, SPD cannot detect meaningful gaps because there is no 'room' "
                 f"for disparity to show. This is called a ceiling effect. "
-                f"The real bias may be hidden — for example in which cases get flagged "
+                f"The real bias may be hidden â€” for example in which cases get flagged "
                 f"for manual review, or in continuous scores rather than binary outcomes."
             )
 
@@ -251,7 +251,7 @@ class BiasExplainer:
             "gap_pct": gap_pct,
         }
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _correlation(
         self,
@@ -314,7 +314,7 @@ class BiasExplainer:
                 interp = (
                     f"'{feature}' is strongly correlated (r={corr:.2f}) with "
                     f"'{sensitive_attr}' and may act as a proxy variable, "
-                    "allowing the model to discriminate indirectly."
+                    "may produce discriminatory outcomes indirectly, even without explicitly using the sensitive attribute."
                 )
             elif corr >= 0.3:
                 strength = "moderate"
@@ -356,3 +356,4 @@ class BiasExplainer:
             return f"'{top['feature']}' correlates with '{sensitive_attr}' (r={top['correlation']:.2f}), {positive_rate_gap:.0%} outcome gap between groups."
         
         return f"{positive_rate_gap:.0%} outcome gap detected between groups of '{sensitive_attr}'. No strong proxy feature found."
+

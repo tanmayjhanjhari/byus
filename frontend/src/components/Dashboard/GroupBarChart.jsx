@@ -18,6 +18,7 @@ export default function GroupBarChart({ groupStats }) {
     name: group,
     rate: stats.positive_rate || 0,
     count: stats.count || 0,
+    positiveCount: stats.positive_count || Math.round((stats.positive_rate || 0) * (stats.count || 0)),
   }));
 
   if (data.length === 0) return null;
@@ -43,18 +44,24 @@ export default function GroupBarChart({ groupStats }) {
       const p = payload[0].payload;
       const dev = p.rate - averageRate;
       const sign = dev > 0 ? "+" : "";
+      const isSmallSample = p.count < 30;
       return (
         <div className="bg-surface/90 border border-white/10 rounded-lg p-3 shadow-xl backdrop-blur-md">
           <p className="font-semibold text-textPrimary mb-1">{label}</p>
           <p className="text-sm text-textSecondary">
-            Pos. Rate: <span className="font-medium text-textPrimary">{(p.rate * 100).toFixed(1)}%</span>
+            Positive Rate: <span className="font-medium text-textPrimary">{(p.rate * 100).toFixed(1)}%</span>
           </p>
           <p className="text-sm text-textSecondary">
-            Deviation: <span className="font-medium text-textPrimary">{sign}{(dev * 100).toFixed(1)}%</span>
+            Positive / Total: <span className="font-medium text-textPrimary">{p.positiveCount} / {p.count}</span>
           </p>
-          <p className="text-xs text-textSecondary mt-1 opacity-70">
-            N = {p.count}
+          <p className="text-sm text-textSecondary">
+            Deviation from avg: <span className="font-medium text-textPrimary">{sign}{(dev * 100).toFixed(1)}%</span>
           </p>
+          {isSmallSample && (
+            <p className="text-xs text-amber-400 mt-2 pt-1 border-t border-white/10">
+              Small sample (n={p.count}): estimates may be unstable
+            </p>
+          )}
         </div>
       );
     }

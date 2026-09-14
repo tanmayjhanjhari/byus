@@ -419,5 +419,19 @@
     "source": "Auto:test_bias.csv-gender",
     "auto": true,
     "timestamp": "2026-09-13T22:17:49.816619"
+  },
+  {
+    "spd": 0.875,
+    "di": 1.0,
+    "top_proxy_r": 0.5451,
+    "group_ratio": 0.0278,
+    "proxy_count": 3,
+    "rate_variance": 0.2213,
+    "scenario": 6,
+    "cause": "proxy",
+    "severity": "high",
+    "source": "Auto:diabetes 1.csv-age",
+    "auto": true,
+    "timestamp": "2026-09-14T04:32:40.124541"
   }
 ]

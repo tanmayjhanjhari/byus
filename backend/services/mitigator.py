@@ -1,9 +1,9 @@
-"""
-FairEnough — Bias Mitigator Service
+﻿"""
+FairEnough â€” Bias Mitigator Service
 
 Runs two mitigation strategies in parallel:
-  1. Reweighing  — assigns sample weights to balance group × label frequencies
-  2. Threshold Adjustment — per-group optimal decision thresholds via scipy
+  1. Reweighing  â€” assigns sample weights to balance group Ã— label frequencies
+  2. Threshold Adjustment â€” per-group optimal decision thresholds via scipy
 
 Returns before/after metrics, effect deltas, and a winner recommendation.
 """
@@ -32,7 +32,7 @@ class BiasMitigator:
     RANDOM_STATE: int = 42
     TEST_SIZE: float = 0.30
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def run_both(
         self,
@@ -59,7 +59,7 @@ class BiasMitigator:
         rew = self.reweigh(df, target_col, sensitive_attr)
         thr = self.threshold_adjust(df, target_col, sensitive_attr)
 
-        # ── Winner selection (cause-aware) ─────────────────────────────────────────
+        # â”€â”€ Winner selection (cause-aware) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         spd_r = abs(rew["after"].get("SPD", 999) or 999)
         spd_t = abs(thr["after"].get("SPD", 999) or 999)
         red_r = rew["effects"].get("bias_reduction_pct", 0)
@@ -205,7 +205,7 @@ class BiasMitigator:
                 f"Threshold Adjustment works by finding different decision thresholds "
                 f"for each group of '{sensitive_attr}'. Instead of using one cutoff "
                 f"for everyone, the model uses group-specific cutoffs that equalise "
-                f"the True Positive Rate — meaning equally qualified people from "
+                f"the True Positive Rate â€” meaning equally qualified people from "
                 f"different groups get equal chances."
             )
         
@@ -215,19 +215,19 @@ class BiasMitigator:
         elif bias_reduction >= 70:
             bias_result = (
                 f"Bias was significantly reduced. SPD dropped from {spd_before:.3f} "
-                f"to {spd_after:.3f} — a {bias_reduction:.0f}% reduction. "
+                f"to {spd_after:.3f} â€” a {bias_reduction:.0f}% reduction. "
                 f"In practical terms, the outcome gap between groups narrowed "
                 f"from {spd_before*100:.1f}% to {spd_after*100:.1f}%."
             )
         elif bias_reduction >= 30:
             bias_result = (
                 f"Bias was partially reduced. SPD dropped from {spd_before:.3f} "
-                f"to {spd_after:.3f} — a {bias_reduction:.0f}% improvement. "
+                f"to {spd_after:.3f} â€” a {bias_reduction:.0f}% improvement. "
                 f"Some gap remains between groups, but the disparity is meaningfully smaller."
             )
         elif bias_reduction > 0:
             bias_result = (
-                f"Bias reduction was modest — only {bias_reduction:.0f}%. "
+                f"Bias reduction was modest â€” only {bias_reduction:.0f}%. "
                 f"SPD moved from {spd_before:.3f} to {spd_after:.3f}. "
                 f"This often happens when the bias is deeply embedded in the "
                 f"feature relationships rather than just class imbalance, "
@@ -244,7 +244,7 @@ class BiasMitigator:
         # What happened to accuracy
         if abs(acc_delta) < 0.005:
             acc_result = (
-                f"Model accuracy was virtually unchanged ({acc_before:.1%} → "
+                f"Model accuracy was virtually unchanged ({acc_before:.1%} â†’ "
                 f"{acc_after:.1%}), meaning fairness was improved at no real "
                 f"cost to predictive performance."
             )
@@ -267,9 +267,7 @@ class BiasMitigator:
         
         # What the graph is showing
         graph_explanation = (
-            f"The Fairness Improvement chart compares SPD, DI, EOD, and AOD "
-            f"before mitigation (gray bars) vs after reweighing (teal) and after "
-            f"threshold adjustment (purple). Shorter bars are better — they mean "
+            f"The Fairness Improvement chart compares SPD, DI, EOD, and AOD " f"before mitigation (gray bars) vs after reweighing (teal) and after " f"threshold adjustment (purple). Shorter bars are better — they mean " f"the gap between groups is smaller. " f"IMPORTANT: EOD and AOD in this chart come from an internal simulation model " f"(GradientBoosting trained on your dataset), not from a real deployed model. " f"SPD and DI before mitigation reflect your actual dataset fairness."
             f"the gap between groups is smaller. "
             f"The Performance Trade-off chart plots each technique as a dot: "
             f"further right means more bias reduction, higher up means more "
@@ -284,7 +282,7 @@ class BiasMitigator:
             "summary": f"{bias_result} {acc_result}"
         }
 
-    # ── Reweighing ────────────────────────────────────────────────────────────
+    # â”€â”€ Reweighing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def reweigh(self, df, target_col, sensitive_attr):
         import numpy as np
@@ -372,6 +370,7 @@ class BiasMitigator:
             "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
             "recall":    round(recall_score(y_test, y_pred_before, zero_division=0), 4),
             "f1":        round(f1_score(y_test, y_pred_before, zero_division=0), 4),
+            "simulation_note": "EOD and AOD are computed by an internal GradientBoosting simulation model, not from your original dataset predictions.",
         }
 
         # --- AFTER metrics (WITH weights on training) ---
@@ -407,7 +406,7 @@ class BiasMitigator:
                 f"(1) bias is driven by a proxy feature that survives weight adjustment, "
                 f"(2) the sensitive attribute has too many unique groups, or "
                 f"(3) the dataset is too small for statistical learning. "
-                f"The fairness metrics (SPD/DI) remain accurate — only the mitigation simulation was limited."
+                f"The fairness metrics (SPD/DI) remain accurate â€” only the mitigation simulation was limited."
             )
         else:
             diagnostic = None
@@ -431,7 +430,7 @@ class BiasMitigator:
                     "mean": round(float(weights.mean()), 3)
                 }}
 
-    # ── Threshold Adjustment ──────────────────────────────────────────────────
+    # â”€â”€ Threshold Adjustment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def threshold_adjust(self, df: pd.DataFrame, target_col: str, sensitive_attr: str):
         import numpy as np
@@ -573,7 +572,7 @@ class BiasMitigator:
                 f"(1) bias is driven by a proxy feature that survives threshold adjustment, "
                 f"(2) the sensitive attribute has too many unique groups, or "
                 f"(3) the dataset is too small for statistical learning. "
-                f"The fairness metrics (SPD/DI) remain accurate — only the mitigation simulation was limited."
+                f"The fairness metrics (SPD/DI) remain accurate â€” only the mitigation simulation was limited."
             )
         else:
             diagnostic = None
@@ -597,7 +596,7 @@ class BiasMitigator:
             "thresholds": {str(k): round(float(v), 2) for k, v in best_thresholds.items()},
         }
 
-    # ── Effects ───────────────────────────────────────────────────────────────
+    # â”€â”€ Effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def effects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
@@ -631,7 +630,7 @@ class BiasMitigator:
             "accuracy_retained_pct": accuracy_retained_pct,
         }
 
-    # ── Core metric computation ───────────────────────────────────────────────
+    # â”€â”€ Core metric computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _compute_metrics(
         self,
@@ -641,7 +640,7 @@ class BiasMitigator:
         sample_weight: np.ndarray | None = None,
     ) -> dict[str, Any]:
         """
-        Stratified 70/30 split → train GradientBoostingClassifier (with optional weights) →
+        Stratified 70/30 split â†’ train GradientBoostingClassifier (with optional weights) â†’
         compute fairness + performance metrics on the held-out test set.
         """
         from sklearn.preprocessing import LabelEncoder
@@ -750,7 +749,7 @@ class BiasMitigator:
             "positive_rates_per_group": pos_rates,
         }
 
-    # ── Feature preparation ───────────────────────────────────────────────────
+    # â”€â”€ Feature preparation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     def _prepare_features(self, df_work, target_col, sensitive_attr):
         import numpy as np
@@ -790,7 +789,7 @@ class BiasMitigator:
                 except Exception:
                     pass
 
-        # Name-based leakage: e.g. target='income_binary' → exclude 'income'
+        # Name-based leakage: e.g. target='income_binary' â†’ exclude 'income'
         target_base = (target_col
                        .replace('_binary', '').replace('_encoded', '')
                        .replace('_label', '').replace('_num', '').lower())
@@ -834,7 +833,7 @@ class BiasMitigator:
 
         return np.hstack(X_parts), feature_cols
 
-    # ── Winner selection ──────────────────────────────────────────────────────
+    # â”€â”€ Winner selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     @staticmethod
     def _pick_winner(rew: dict, thr: dict) -> str:
@@ -853,7 +852,7 @@ class BiasMitigator:
         thr_acc = thr_eff.get("accuracy_retained_pct", 100) or 100
 
         if abs(rew_bias - thr_bias) <= 5.0:
-            # Similar bias reduction → prefer higher accuracy
+            # Similar bias reduction â†’ prefer higher accuracy
             return "reweigh" if rew_acc >= thr_acc else "threshold"
         return "reweigh" if rew_bias >= thr_bias else "threshold"
 
@@ -909,3 +908,5 @@ class BiasMitigator:
         tpr_diff = abs(tprs[groups_list[0]] - tprs[groups_list[1]])
         fpr_diff = abs(fprs[groups_list[0]] - fprs[groups_list[1]])
         return round(float((tpr_diff + fpr_diff) / 2), 4)
+
+

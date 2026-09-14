@@ -1,35 +1,70 @@
-"""
-FairEnough — Bias Analysis Engine
+﻿"""
+FairEnough – Bias Engine
 
-Computes SPD, DI, EOD, AOD per sensitive attribute with bootstrapped
-confidence intervals, severity labels, and a composite Audit Score.
+Computes dataset-level and model-level fairness metrics.
+
+METRIC MODES
+============
+dataset_level (no y_pred provided):
+  - SPD  (Statistical Parity Difference)  — REAL measurement
+  - DI   (Disparate Impact)               — REAL measurement
+  - EOD  (Equal Opportunity Difference)   — NOT AVAILABLE (None)
+  - AOD  (Average Odds Difference)        — NOT AVAILABLE (None)
+
+model_level (y_pred provided via __predictions__ column):
+  - SPD  — REAL measurement
+  - DI   — REAL measurement
+  - EOD  — REAL measurement
+  - AOD  — REAL measurement
+
+IMPORTANT: EOD and AOD are NEVER fabricated from an internal simulation
+model when no external predictions exist.  null/None means "not available",
+not "perfectly fair".
+
+CONTINUOUS ATTRIBUTE BINNING
+=============================
+Numeric sensitive attributes with more than CARDINALITY_BIN_THRESHOLD
+unique values are automatically binned into two groups using
+CONTINUOUS_BIN_THRESHOLD as the cut-off.
+
+  Age < 50  → "Younger (<50)"   [unprivileged by convention]
+  Age >= 50 → "Older (>=50)"    [privileged   by convention]
+
+This avoids the statistical nonsense of comparing individual ages that
+each have fewer than 10 samples.
 """
 
 from __future__ import annotations
 
-import warnings as _warnings
 from typing import Any
 
 import numpy as np
 import pandas as pd
-
-# Suppress noisy sklearn warnings during bootstrap resamples
-_warnings.filterwarnings("ignore", category=RuntimeWarning)
+from sklearn.preprocessing import LabelEncoder
 
 
 class BiasEngine:
     """
-    Compute fairness metrics for a DataFrame.
+    Compute fairness metrics for a dataset.
 
-    All metrics follow the convention that *privileged* is the largest
-    demographic group by count.  This is pragmatic and avoids requiring the
-    caller to know which group is historically advantaged.
+    Privileged group = the group with the highest positive outcome rate.
+    This is pragmatic and avoids requiring the caller to know which group
+    is historically advantaged.
     """
 
     BOOTSTRAP_N: int = 200
     BOOTSTRAP_SEED: int = 42
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # Continuous attribute binning config
+    # If a numeric attribute has more than this many unique values it is
+    # automatically binned into two groups.
+    CARDINALITY_BIN_THRESHOLD: int = 10
+    # The numeric cut-off used for binary binning (e.g. Age).
+    CONTINUOUS_BIN_THRESHOLD: float = 50.0
+    # Labels for the two bins.  (unprivileged, privileged)
+    CONTINUOUS_BIN_LABELS: tuple[str, str] = ("Younger (<50)", "Older (>=50)")
+
+    # ── Public API ──────────────────────────────────────────────────────────
 
     def analyze(
         self,
@@ -52,14 +87,16 @@ class BiasEngine:
             Protected-attribute columns to analyse.
         use_predictions : bool
             When True, metrics are computed against ``__predictions__`` instead
-            of ``target_col``.
+            of ``target_col``; this enables EOD and AOD.
 
         Returns
         -------
         dict
-            ``metrics_per_attr``, ``audit_score``, ``overall_severity``
+            ``metrics_per_attr``, ``audit_score``, ``overall_severity``,
+            ``grade``, ``grade_label``, ``metrics_mode``
         """
         label_col = "__predictions__" if use_predictions else target_col
+        metrics_mode = "model_level" if use_predictions else "dataset_level"
 
         metrics_per_attr: dict[str, Any] = {}
 
@@ -70,8 +107,7 @@ class BiasEngine:
                 }
                 continue
 
-            # Drop rows where the attribute or label is null, but keep ALL columns
-            # so _compute_attr_metrics has feature columns available for internal EOD/AOD model
+            # Drop rows where the attribute or label is null
             sub = df.dropna(subset=list(dict.fromkeys([attr, label_col])))
             if sub.empty:
                 metrics_per_attr[attr] = {
@@ -80,10 +116,10 @@ class BiasEngine:
                 continue
 
             metrics_per_attr[attr] = self._compute_attr_metrics(
-                sub, attr, target_col, label_col
+                sub, attr, target_col, label_col, use_predictions
             )
 
-        # ── Audit Score ───────────────────────────────────────────────────────
+        # ── Audit Score ─────────────────────────────────────────────────────
         audit_score_rounded = self._compute_audit_score(metrics_per_attr)
 
         # Grade and overall severity MUST come from audit_score only
@@ -95,9 +131,33 @@ class BiasEngine:
             "grade": grade,
             "overall_severity": overall_severity,
             "grade_label": grade_label,
+            "metrics_mode": metrics_mode,
         }
 
-    # ── Private helpers ───────────────────────────────────────────────────────
+    # ── Private helpers ─────────────────────────────────────────────────────
+
+    def _bin_continuous_attr(
+        self,
+        series: pd.Series,
+        attr: str,
+    ) -> tuple[pd.Series, str]:
+        """
+        Bin a continuous numeric attribute into two labelled groups.
+
+        Returns the binned Series and a description string.
+        """
+        threshold = self.CONTINUOUS_BIN_THRESHOLD
+        low_label, high_label = self.CONTINUOUS_BIN_LABELS
+
+        binned = series.apply(
+            lambda v: high_label if pd.notna(v) and float(v) >= threshold else low_label
+        )
+        desc = (
+            f"'{attr}' was automatically binned: "
+            f"values < {threshold} → '{low_label}', "
+            f"values >= {threshold} → '{high_label}'."
+        )
+        return binned, desc
 
     def _compute_attr_metrics(
         self,
@@ -105,15 +165,19 @@ class BiasEngine:
         attr: str,
         target_col: str,
         label_col: str,
+        use_predictions: bool = False,
     ) -> dict[str, Any]:
         """Compute all metrics for a single sensitive attribute."""
         feature_cols = [c for c in sub.columns if c not in [target_col, attr, label_col]]
-        # Step 1 — always work on a clean copy
         cols_to_select = list(dict.fromkeys([target_col, attr, label_col] + feature_cols))
         df_work = sub[cols_to_select].copy()
         df_work = df_work.dropna(subset=[target_col, attr])
 
-        # Step 2 — binarize target robustly
+        warnings_list: list[str] = []
+        binning_applied: bool = False
+        binning_note: str | None = None
+
+        # ── Step 1: Binarize target ──────────────────────────────────────────
         y = df_work[label_col]
         if set(y.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
             y_bin = y.astype(int)
@@ -127,49 +191,105 @@ class BiasEngine:
             y_bin = (y == y.mode()[0]).astype(int)
         df_work['__target__'] = y_bin
 
-        # Step 3 — encode sensitive attribute as integers
-        from sklearn.preprocessing import LabelEncoder
+        # ── Step 2: Handle sensitive attribute grouping ──────────────────────
+        # If numeric with high cardinality → bin into two meaningful groups.
+        raw_n_unique = df_work[attr].nunique()
+        if (
+            pd.api.types.is_numeric_dtype(df_work[attr])
+            and raw_n_unique > self.CARDINALITY_BIN_THRESHOLD
+        ):
+            binned_series, binning_note = self._bin_continuous_attr(df_work[attr], attr)
+            df_work['__sens_raw__'] = binned_series
+            binning_applied = True
+            warnings_list.append(
+                f"'{attr}' has {raw_n_unique} unique numeric values. "
+                f"Automatically binned into 2 groups using threshold "
+                f"{self.CONTINUOUS_BIN_THRESHOLD}: "
+                f"{self.CONTINUOUS_BIN_LABELS[0]} / {self.CONTINUOUS_BIN_LABELS[1]}."
+            )
+        else:
+            df_work['__sens_raw__'] = df_work[attr].astype(str)
+
+        # ── Step 3: Encode sensitive groups as integers ──────────────────────
         le = LabelEncoder()
-        df_work['__sens__'] = le.fit_transform(df_work[attr].astype(str))
+        df_work['__sens__'] = le.fit_transform(df_work['__sens_raw__'])
         group_names = {i: name for i, name in enumerate(le.classes_)}
 
-        warnings_list = []
-
-        # Step 4 — compute group positive rates
+        # ── Step 4: Compute group positive rates ────────────────────────────
         groups = df_work['__sens__'].unique()
-        group_stats = {}
+        group_stats: dict[str, Any] = {}
+        small_sample_groups: list[str] = []
+
         for g in groups:
             mask = df_work['__sens__'] == g
             group_name = group_names[g]
             count = int(mask.sum())
             if count <= 1:
-                warnings_list.append(f"Group '{group_name}' has only {count} member(s) — excluded from metrics.")
+                warnings_list.append(
+                    f"Group '{group_name}' has only {count} member(s) — excluded from metrics."
+                )
                 continue
+            pos_count = int(df_work.loc[mask, '__target__'].sum())
             pos_rate = float(df_work.loc[mask, '__target__'].mean())
             group_stats[str(group_name)] = {
                 "count": count,
+                "positive_count": pos_count,
                 "positive_rate": round(pos_rate, 4),
-                "pct_of_total": round(count / len(df_work) * 100, 1)
+                "pct_of_total": round(count / len(df_work) * 100, 1),
             }
+            # Small-sample warning
+            if count < 30:
+                small_sample_groups.append(group_name)
+                warnings_list.append(
+                    f"Group '{group_name}' has only {count} records. "
+                    f"Statistical estimates for this group may be unstable. "
+                    f"Observed disparity should not be interpreted as definitive "
+                    f"evidence of systematic discrimination."
+                )
 
         if len(group_stats) < 2:
             return {
                 "error": f"'{attr}' has fewer than 2 valid groups after filtering.",
                 "group_stats": group_stats,
+                "binning_applied": binning_applied,
+                "binning_note": binning_note,
             }
 
-        # Step 5 — find privileged and unprivileged
-        priv_name = max(group_stats, key=lambda g: group_stats[g]["positive_rate"])
+        # ── Step 5: Identify privileged / unprivileged groups ───────────────
+        # Privileged = highest positive rate (most advantaged outcome).
+        # For a binned age attribute, "Older (>=50)" or "Younger (<50)"
+        # is determined by data, not hardcoded — this is intentionally
+        # data-driven and consistent throughout.
+        priv_name   = max(group_stats, key=lambda g: group_stats[g]["positive_rate"])
         unpriv_name = min(group_stats, key=lambda g: group_stats[g]["positive_rate"])
-        priv_rate = group_stats[priv_name]["positive_rate"]
+        priv_rate   = group_stats[priv_name]["positive_rate"]
         unpriv_rate = group_stats[unpriv_name]["positive_rate"]
 
-        # Step 6 — compute metrics
-        SPD = round(priv_rate - unpriv_rate, 4)
-        DI = round(unpriv_rate / priv_rate, 4) if priv_rate > 0 else 0.0
+        # ── Step 6: Dataset-level metrics (always available) ─────────────────
+        # SPD = positive_rate(unprivileged) - positive_rate(privileged)
+        # Convention: negative = unprivileged group receives fewer positives.
+        SPD = round(unpriv_rate - priv_rate, 4)
 
-        if label_col != target_col:
-            # External model predictions available — compare predictions vs ground truth
+        # DI  = positive_rate(unprivileged) / positive_rate(privileged)
+        if priv_rate > 0:
+            DI = round(unpriv_rate / priv_rate, 4)
+        elif unpriv_rate == 0:
+            DI = 1.0  # both groups have 0 positives — no disparity
+        else:
+            DI = None  # denominator is 0 but numerator is not — undefined
+            warnings_list.append(
+                "Disparate Impact is undefined: the privileged group has 0 positive outcomes. "
+                "Check that your target column is correctly encoded."
+            )
+
+        # ── Step 7: Model-level metrics (only when predictions exist) ────────
+        # EOD and AOD REQUIRE y_pred. Without external predictions these
+        # metrics are UNAVAILABLE — represented as None, never fabricated.
+        EOD: float | None = None
+        AOD: float | None = None
+
+        if use_predictions and label_col != target_col:
+            # External model predictions available — compute vs ground truth
             y_true = df_work[target_col]
             if set(y_true.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
                 y_true_bin = y_true.astype(int)
@@ -183,133 +303,56 @@ class BiasEngine:
                 y_true_bin = (y_true == y_true.mode()[0]).astype(int)
             df_work['__truth__'] = y_true_bin
 
-            priv_encoded = next(k for k, v in group_names.items() if str(v) == priv_name)
+            priv_encoded   = next(k for k, v in group_names.items() if str(v) == priv_name)
             unpriv_encoded = next(k for k, v in group_names.items() if str(v) == unpriv_name)
-            eod, aod = self._equal_opportunity_encoded(df_work, '__truth__', '__target__', '__sens__', priv_encoded, unpriv_encoded)
+            eod, aod = self._equal_opportunity_encoded(
+                df_work, '__truth__', '__target__', '__sens__',
+                priv_encoded, unpriv_encoded
+            )
             EOD = round(eod, 4) if eod is not None else None
             AOD = round(aod, 4) if aod is not None else None
-        else:
-            # No external model — train an internal classifier and compute EOD/AOD from
-            # its predictions vs ground truth, same method used by BiasMitigator.
-            EOD = None
-            AOD = None
-            try:
-                import numpy as _np
-                from sklearn.ensemble import GradientBoostingClassifier
-                from sklearn.model_selection import train_test_split
-                from sklearn.preprocessing import LabelEncoder as _LE
+        # else: EOD = None, AOD = None — correct, no fabrication
 
-                # Build clean feature matrix — exclude target and sensitive attr
-                exclude_cols = {target_col, attr, label_col, '__target__', '__sens__',
-                                '__truth__', '__predictions__'}
-                feat_candidates = [c for c in df_work.columns if c not in exclude_cols]
+        # ── Step 8: Extreme-value sanity check ───────────────────────────────
+        spd_abs = abs(SPD)
+        if spd_abs > 0.99 and (DI is not None and DI < 0.01):
+            warnings_list.append(
+                "Metrics look extreme. Check that the target column is correctly "
+                "binary and the sensitive attribute has meaningful variation."
+            )
 
-                if feat_candidates and len(df_work) >= 60:
-                    y_all = df_work['__target__'].values
-                    s_all = df_work['__sens__'].values
-
-                    # Leakage guard: DROP individual leaking columns (corr > 0.95 with target)
-                    # Do NOT abort the entire model — just remove the bad columns.
-                    clean_cols = []
-                    X_parts = []
-                    for fc in feat_candidates:
-                        col_data = df_work[fc].copy()
-                        if col_data.dtype.kind in ('i', 'f'):
-                            arr = col_data.fillna(col_data.median()).values.astype(float)
-                        else:
-                            arr = _LE().fit_transform(
-                                col_data.fillna('missing').astype(str)
-                            ).astype(float)
-
-                        try:
-                            corr = abs(float(_np.corrcoef(arr, y_all)[0, 1]))
-                        except Exception:
-                            corr = 0.0
-
-                        if corr > 0.95:
-                            # Skip this column — it leaks the target
-                            continue
-
-                        clean_cols.append(fc)
-                        X_parts.append(arr.reshape(-1, 1))
-
-                    if X_parts:  # At least one clean feature remains
-                        X_all = _np.hstack(X_parts)
-                        idx = _np.arange(len(df_work))
-                        idx_tr, idx_te = train_test_split(
-                            idx, test_size=0.30, random_state=42, stratify=y_all
-                        )
-                        clf = GradientBoostingClassifier(
-                            n_estimators=100, max_depth=3,
-                            learning_rate=0.1, subsample=0.8,
-                            random_state=42
-                        )
-                        clf.fit(X_all[idx_tr], y_all[idx_tr])
-                        y_pred = clf.predict(X_all[idx_te])
-                        y_true_te = y_all[idx_te]
-                        s_te = s_all[idx_te]
-
-                        # Compute EOD and AOD from model predictions vs ground truth
-                        groups_te = _np.unique(s_te)
-                        if len(groups_te) >= 2:
-                            rates = {g: _np.mean(y_pred[s_te == g]) for g in groups_te}
-                            priv_g   = max(rates, key=rates.get)
-                            unpriv_g = min(rates, key=rates.get)
-
-                            def _tpr_fpr(mask):
-                                yg, pg = y_true_te[mask], y_pred[mask]
-                                tp = int(((pg == 1) & (yg == 1)).sum())
-                                fn = int(((pg == 0) & (yg == 1)).sum())
-                                fp = int(((pg == 1) & (yg == 0)).sum())
-                                tn = int(((pg == 0) & (yg == 0)).sum())
-                                tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-                                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-                                return tpr, fpr
-
-                            tpr_p, fpr_p = _tpr_fpr(s_te == priv_g)
-                            tpr_u, fpr_u = _tpr_fpr(s_te == unpriv_g)
-
-                            EOD = round(float(tpr_p - tpr_u), 4)
-                            AOD = round(float(((tpr_p - tpr_u) + (fpr_p - fpr_u)) / 2), 4)
-            except Exception as _e:
-                # Never break analysis if internal model fails
-                pass
-
-
-        if SPD > 0.99 and DI < 0.01:
-            warnings_list.append("Metrics look extreme. Check that target column is correctly binary and sensitive attribute has meaningful variation.")
-
-        # Step 7 — bootstrapped CI for SPD
-        spd_samples = []
-        for _ in range(self.BOOTSTRAP_N):
-            sample = df_work.sample(frac=1.0, replace=True, random_state=None)
-            rates = sample.groupby('__sens__')['__target__'].mean()
-            if len(rates) >= 2:
-                spd_samples.append(float(rates.max() - rates.min()))
-        if spd_samples:
-            ci_low = round(float(np.percentile(spd_samples, 2.5)), 4)
-            ci_high = round(float(np.percentile(spd_samples, 97.5)), 4)
-            statistically_significant = not (ci_low <= 0 <= ci_high)
-        else:
-            ci_low, ci_high, statistically_significant = None, None, True
+        # ── Step 9: Bootstrapped CI for SPD ──────────────────────────────────
+        ci, statistically_significant = self._bootstrap_spd_ci(
+            df_work, '__sens__', '__target__',
+            next(k for k, v in group_names.items() if str(v) == priv_name),
+            next(k for k, v in group_names.items() if str(v) == unpriv_name),
+        )
 
         return {
-            "privileged_group": str(priv_name),
+            "privileged_group":   str(priv_name),
             "unprivileged_group": str(unpriv_name),
-            "group_stats": group_stats,
-            "spd": SPD,
-            "di": DI,
-            "eod": EOD,
-            "aod": AOD,
-            "SPD": SPD,
-            "DI": DI,
-            "EOD": EOD,
-            "AOD": AOD,
-            "severity": self._severity(SPD),
-            "legal_flag": DI < 0.8,
-            "bootstrapped_ci": {"low_95": ci_low, "high_95": ci_high},
+            "group_stats":  group_stats,
+            "spd":  SPD,
+            "di":   DI,
+            "eod":  EOD,   # None when no predictions
+            "aod":  AOD,   # None when no predictions
+            # Upper-case aliases for backwards compatibility
+            "SPD":  SPD,
+            "DI":   DI,
+            "EOD":  EOD,
+            "AOD":  AOD,
+            "severity":        self._severity(SPD),
+            "legal_flag":      (DI is not None and DI < 0.8),
+            "bootstrapped_ci": ci,
             "statistically_significant": statistically_significant,
-            "warnings": warnings_list
+            "warnings":         warnings_list,
+            "binning_applied":  binning_applied,
+            "binning_note":     binning_note,
+            "raw_cardinality":  raw_n_unique,
+            "small_sample_groups": small_sample_groups,
+            "eod_available":    EOD is not None,
+            "aod_available":    AOD is not None,
+            "metrics_mode":     "model_level" if use_predictions else "dataset_level",
         }
 
     def _equal_opportunity_encoded(
@@ -322,9 +365,9 @@ class BiasEngine:
         unprivileged: Any,
     ) -> tuple[float | None, float | None]:
         def tpr_fpr(mask: pd.Series) -> tuple[float, float]:
-            grp = sub[mask]
+            grp    = sub[mask]
             actual = grp[truth_col]
-            pred = grp[target_col]
+            pred   = grp[target_col]
             tp = int(((pred == 1) & (actual == 1)).sum())
             fn = int(((pred == 0) & (actual == 1)).sum())
             fp = int(((pred == 1) & (actual == 0)).sum())
@@ -333,18 +376,20 @@ class BiasEngine:
             fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
             return tpr, fpr
 
-        priv_mask = sub[sens_col] == privileged
+        priv_mask   = sub[sens_col] == privileged
         unpriv_mask = sub[sens_col] == unprivileged
 
-        tpr_priv, fpr_priv = tpr_fpr(priv_mask)
+        tpr_priv,   fpr_priv   = tpr_fpr(priv_mask)
         tpr_unpriv, fpr_unpriv = tpr_fpr(unpriv_mask)
 
-        eod = tpr_priv - tpr_unpriv
-        aod = ((tpr_priv - tpr_unpriv) + (fpr_priv - fpr_unpriv)) / 2.0
+        # EOD = TPR(unprivileged) - TPR(privileged)  [negative = disadvantaged]
+        eod = tpr_unpriv - tpr_priv
+        # AOD = 0.5 * [(TPR_u - TPR_p) + (FPR_u - FPR_p)]
+        aod = ((tpr_unpriv - tpr_priv) + (fpr_unpriv - fpr_priv)) / 2.0
 
         return float(eod), float(aod)
 
-    # ── Bootstrapped CI ───────────────────────────────────────────────────────
+    # ── Bootstrapped CI ──────────────────────────────────────────────────────
 
     def _bootstrap_spd_ci(
         self,
@@ -360,21 +405,22 @@ class BiasEngine:
         Returns (ci_dict, statistically_significant).
         """
         rng = np.random.default_rng(self.BOOTSTRAP_SEED)
-        n = len(sub)
+        n   = len(sub)
         spd_samples: list[float] = []
 
         for _ in range(self.BOOTSTRAP_N):
-            sample = sub.iloc[rng.integers(0, n, size=n)]
-            priv_rate = float(sample.loc[sample[attr] == privileged, label_col].mean())
+            sample    = sub.iloc[rng.integers(0, n, size=n)]
+            priv_rate   = float(sample.loc[sample[attr] == privileged,   label_col].mean())
             unpriv_rate = float(sample.loc[sample[attr] == unprivileged, label_col].mean())
             if np.isnan(priv_rate) or np.isnan(unpriv_rate):
                 continue
-            spd_samples.append(priv_rate - unpriv_rate)
+            # Match sign convention: unprivileged - privileged
+            spd_samples.append(unpriv_rate - priv_rate)
 
         if len(spd_samples) < 10:
             return {"low_95": None, "high_95": None}, False
 
-        low_95 = float(np.percentile(spd_samples, 2.5))
+        low_95  = float(np.percentile(spd_samples, 2.5))
         high_95 = float(np.percentile(spd_samples, 97.5))
         # Statistically significant if CI does NOT cross zero
         significant = not (low_95 <= 0 <= high_95)
@@ -384,32 +430,30 @@ class BiasEngine:
             significant,
         )
 
-    # ── Severity & Grade ──────────────────────────────────────────────────────
+    # ── Severity & Grade ─────────────────────────────────────────────────────
 
     @staticmethod
     def _derive_grade_and_severity(audit_score: float):
         if audit_score >= 85:
-            return "A", "low",   "Fair",           "#22C55E"
+            return "A", "low",    "Fair",           "#22C55E"
         elif audit_score >= 70:
-            return "B", "low",   "Minor Issues",   "#84CC16"
+            return "B", "low",    "Minor Issues",   "#84CC16"
         elif audit_score >= 50:
-            return "C", "medium","Moderate Bias",  "#F59E0B"
+            return "C", "medium", "Moderate Bias",  "#F59E0B"
         else:
-            return "F", "high",  "High Bias",      "#EF4444"
+            return "F", "high",   "High Bias",      "#EF4444"
 
     @staticmethod
     def _get_overall_severity(audit_score: float) -> str:
-        """Severity must always match the grade, derived from audit_score."""
         return BiasEngine._derive_grade_and_severity(audit_score)[1]
 
     @staticmethod
     def _get_grade(audit_score: float) -> str:
-        """Grade derived from audit_score."""
         return BiasEngine._derive_grade_and_severity(audit_score)[0]
 
     @staticmethod
     def _severity(spd: float) -> str:
-        """Per-attribute severity based on SPD thresholds (independent of overall grade)."""
+        """Per-attribute severity based on SPD thresholds."""
         abs_spd = abs(spd)
         if abs_spd < 0.1:
             return "low"
@@ -419,10 +463,19 @@ class BiasEngine:
 
     @staticmethod
     def _grade(score: float) -> str:
-        """Legacy method kept for backwards compat — delegates to _get_grade."""
+        """Legacy method kept for backwards compat."""
         return BiasEngine._get_grade(score)
 
     def _compute_audit_score(self, metrics_per_attr: dict) -> float:
+        """
+        Compute overall audit score (0-100, higher is fairer).
+
+        IMPORTANT: EOD and AOD are only included in the penalty when they
+        are genuinely available (not None).  Unavailable metrics do NOT
+        contribute a zero penalty (which would incorrectly boost the score)
+        and do NOT contribute a maximum penalty (which would incorrectly
+        penalise datasets without predictions).
+        """
         if not metrics_per_attr:
             return 100.0
         penalties = []
@@ -430,17 +483,24 @@ class BiasEngine:
             if "error" in m:
                 continue
             spd = abs(m.get("spd", m.get("SPD", 0)) or 0)
-            di = m.get("di", m.get("DI", 1.0)) or 1.0
-            eod = m.get("eod", m.get("EOD"))
+            di  = m.get("di", m.get("DI", 1.0))
+            eod = m.get("eod", m.get("EOD"))  # will be None if dataset-level
 
             # SPD penalty: 0.1→15pts, 0.2→35pts, 0.3→55pts, 0.5→80pts
             spd_penalty = min(80, spd * 160)
 
             # DI penalty: only when below 0.8 legal threshold
-            di_penalty = min(45, max(0, (0.8 - di) * 75)) if di < 0.8 else 0
+            if di is None:
+                di_penalty = 0  # DI unavailable — no penalty contribution
+            else:
+                di_penalty = min(45, max(0, (0.8 - di) * 75)) if di < 0.8 else 0
 
-            # EOD penalty if available
-            eod_penalty = min(20, abs(eod) * 60) if eod is not None and not np.isnan(eod) else 0
+            # EOD penalty: ONLY when EOD is a real measurement (not None)
+            # Never treat None as 0.
+            if eod is not None and not (isinstance(eod, float) and np.isnan(eod)):
+                eod_penalty = min(20, abs(eod) * 60)
+            else:
+                eod_penalty = 0  # Not available — excluded from scoring
 
             penalties.append(spd_penalty + di_penalty + eod_penalty)
 
