@@ -86,12 +86,25 @@ async def mitigate(
     predicted_cause = pattern_preds.get(body.sensitive_attr, {}).get("predicted_cause")
 
     # BiasMitigator works on any tabular data regardless of fallback flag
+    # Extract analysis baseline for this sensitive attribute
+    # This ensures mitigation "before" values match the analysis page exactly.
+    bias_results = session.get("bias_results", {})
+    attr_metrics = bias_results.get("metrics_per_attr", {}).get(body.sensitive_attr, {})
+    baseline_spd = attr_metrics.get("spd") or attr_metrics.get("SPD")
+    baseline_di  = attr_metrics.get("di")  or attr_metrics.get("DI")
+    baseline_gs  = attr_metrics.get("group_stats")
+    print(f"[Mitigate] Analysis baseline for {body.sensitive_attr!r}: "
+          f"SPD={baseline_spd}, DI={baseline_di}")
+
     try:
         mitigation_results = mitigator.run_both(
             df=df,
             target_col=body.target_col,
             sensitive_attr=body.sensitive_attr,
             predicted_cause=predicted_cause,
+            baseline_spd=baseline_spd,
+            baseline_di=baseline_di,
+            baseline_group_stats=baseline_gs,
         )
     except Exception as exc:
         raise HTTPException(

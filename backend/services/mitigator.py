@@ -1,11 +1,31 @@
-﻿"""
-FairEnough â€” Bias Mitigator Service
+"""
+FairEnough - Bias Mitigator Service
 
-Runs two mitigation strategies in parallel:
-  1. Reweighing  â€” assigns sample weights to balance group Ã— label frequencies
-  2. Threshold Adjustment â€” per-group optimal decision thresholds via scipy
+ARCHITECTURE
+============
+Two mitigation strategies:
+  1. Reweighing           - dataset-level (weights only, no model required)
+  2. Threshold Adjustment - model-level simulation (GBM, labelled as simulation)
 
-Returns before/after metrics, effect deltas, and a winner recommendation.
+METRIC HONESTY POLICY
+=====================
+  - "Before" SPD/DI come from the BiasEngine analysis baseline (same values as
+    the analysis page). They are NOT recomputed from model predictions here.
+
+  - "After" Reweighing SPD/DI are computed from the REWEIGHTED dataset positive
+    rates (dataset-level) -- not from model predictions.
+
+  - "After" Threshold Adjustment SPD/DI are computed from simulation model
+    predictions (clearly labelled is_simulation=True).
+
+  - EOD and AOD are ALWAYS None. They require real external model predictions
+    which do not exist in the dataset-only workflow.
+
+  - Acc/Precision/Recall/F1 come from an internal GBM simulation model.
+    Clearly labelled with simulation_note field.
+
+  - Sensitive attribute binning mirrors BiasEngine exactly
+    (CARDINALITY_BIN_THRESHOLD=10, CONTINUOUS_BIN_THRESHOLD=50.0).
 """
 
 from __future__ import annotations
@@ -14,7 +34,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize_scalar
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import (
     accuracy_score,
@@ -27,145 +46,210 @@ from sklearn.preprocessing import LabelEncoder
 
 
 class BiasMitigator:
-    """Run reweighing and threshold-adjustment mitigation on tabular data."""
+    """Honest bias mitigation - dataset-level metrics, simulation clearly labelled."""
 
     RANDOM_STATE: int = 42
     TEST_SIZE: float = 0.30
 
-    # â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # Must match BiasEngine constants exactly
+    CARDINALITY_BIN_THRESHOLD: int = 10
+    CONTINUOUS_BIN_THRESHOLD: float = 50.0
+    CONTINUOUS_BIN_LABELS: tuple = ("Younger (<50)", "Older (>=50)")
+
+    # ── Binning (mirrors BiasEngine._bin_continuous_attr) ─────────────────────
+
+    def _apply_binning(self, series: pd.Series, attr: str) -> pd.Series:
+        """
+        Apply the same binning logic as BiasEngine._bin_continuous_attr.
+        Numeric attrs with > CARDINALITY_BIN_THRESHOLD unique values are
+        binned into two groups at CONTINUOUS_BIN_THRESHOLD.
+        """
+        if (pd.api.types.is_numeric_dtype(series)
+                and series.nunique() > self.CARDINALITY_BIN_THRESHOLD):
+            threshold = self.CONTINUOUS_BIN_THRESHOLD
+            low_label, high_label = self.CONTINUOUS_BIN_LABELS
+            return series.apply(
+                lambda v: high_label if pd.notna(v) and float(v) >= threshold
+                else low_label
+            )
+        return series.astype(str)
+
+    # ── Dataset-level SPD/DI (identical formula to BiasEngine) ────────────────
+
+    def _dataset_spd_di(
+        self,
+        df: pd.DataFrame,
+        target_col: str,
+        sens_col: str,
+        weight_col: str | None = None,
+    ) -> tuple:
+        """
+        Compute dataset-level SPD and DI from positive outcome rates.
+        Optionally uses sample weights for computing weighted positive rates.
+
+        SPD = positive_rate(unprivileged) - positive_rate(privileged)
+              (negative = unprivileged group has FEWER positives, consistent with BiasEngine)
+        DI  = positive_rate(unprivileged) / positive_rate(privileged)
+
+        Returns (spd, di, group_stats).
+        """
+        sub = df.dropna(subset=[target_col, sens_col]).copy()
+
+        # Binarize target
+        y = sub[target_col]
+        if set(y.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
+            y_bin = y.astype(int)
+        elif y.nunique() == 2:
+            vals = sorted(y.unique())
+            y_bin = y.map({vals[0]: 0, vals[1]: 1})
+        elif pd.api.types.is_numeric_dtype(y):
+            y_bin = (y > y.median()).astype(int)
+        else:
+            y_bin = (y == y.mode()[0]).astype(int)
+        sub = sub.copy()
+        sub["__y_tmp__"] = y_bin
+
+        # Compute weighted positive rate per group
+        group_stats: dict[str, dict] = {}
+        for group_name, grp in sub.groupby(sens_col):
+            if weight_col and weight_col in grp.columns:
+                w = grp[weight_col].clip(0)
+                total_w = w.sum()
+                if total_w == 0:
+                    continue
+                pos_rate = float((grp["__y_tmp__"] * w).sum() / total_w)
+            else:
+                pos_rate = float(grp["__y_tmp__"].mean())
+            group_stats[str(group_name)] = {
+                "count": int(len(grp)),
+                "positive_count": int(grp["__y_tmp__"].sum()),
+                "positive_rate": round(pos_rate, 4),
+            }
+
+        if len(group_stats) < 2:
+            return 0.0, None, group_stats
+
+        priv_name   = max(group_stats, key=lambda g: group_stats[g]["positive_rate"])
+        unpriv_name = min(group_stats, key=lambda g: group_stats[g]["positive_rate"])
+        priv_rate   = group_stats[priv_name]["positive_rate"]
+        unpriv_rate = group_stats[unpriv_name]["positive_rate"]
+
+        # SPD: negative = unprivileged receives fewer positives (same sign as BiasEngine)
+        spd = round(unpriv_rate - priv_rate, 4)
+        di  = round(unpriv_rate / priv_rate, 4) if priv_rate > 0 else None
+
+        return spd, di, group_stats
+
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     def run_both(
         self,
         df: pd.DataFrame,
         target_col: str,
         sensitive_attr: str,
-        predicted_cause: str = None,
+        predicted_cause: str | None = None,
+        # Analysis baseline — use as authoritative "before" so both pages
+        # show the same dataset-level values.
+        baseline_spd: float | None = None,
+        baseline_di: float | None = None,
+        baseline_group_stats: dict | None = None,
     ) -> dict[str, Any]:
-        """
-        Run both mitigation strategies and return a unified comparison.
-        """
-        # Sanity check: warn about potential leakage columns before running
-        df_check = df.copy().dropna(subset=[target_col])
-        y_check = df_check[target_col]
-        if set(y_check.unique()).issubset({0, 1, 0.0, 1.0}):
-            target_base = target_col.replace('_binary', '').replace('_encoded', '')
-            leak_suspects = [c for c in df_check.columns
-                             if c != target_col
-                             and target_base.lower() in c.lower()]
-            if leak_suspects:
-                print(f"[Mitigator] WARNING: Possible leakage columns "
-                      f"detected: {leak_suspects}. These will be excluded.")
+        """Run both mitigation strategies and return a unified comparison."""
+        rew = self.reweigh(
+            df, target_col, sensitive_attr,
+            baseline_spd=baseline_spd,
+            baseline_di=baseline_di,
+            baseline_group_stats=baseline_group_stats,
+        )
+        thr = self.threshold_adjust(
+            df, target_col, sensitive_attr,
+            baseline_spd=baseline_spd,
+            baseline_di=baseline_di,
+            baseline_group_stats=baseline_group_stats,
+        )
 
-        rew = self.reweigh(df, target_col, sensitive_attr)
-        thr = self.threshold_adjust(df, target_col, sensitive_attr)
+        # ── Winner selection (dataset-level SPD only — no EOD/AOD) ────────────
+        spd_b = abs(rew["before"]["SPD"] or 0)
+        spd_r = abs(rew["after"]["SPD"] or 0)
+        spd_t = abs(thr["after"]["SPD"] or 0)
 
-        # â”€â”€ Winner selection (cause-aware) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        spd_r = abs(rew["after"].get("SPD", 999) or 999)
-        spd_t = abs(thr["after"].get("SPD", 999) or 999)
-        red_r = rew["effects"].get("bias_reduction_pct", 0)
-        red_t = thr["effects"].get("bias_reduction_pct", 0)
-        acc_r = rew["effects"].get("accuracy_retained_pct", 0)
-        acc_t = thr["effects"].get("accuracy_retained_pct", 0)
+        red_r = round(((spd_b - spd_r) / max(spd_b, 1e-9)) * 100, 1) if spd_b > 0 else 0.0
+        red_t = round(((spd_b - spd_t) / max(spd_b, 1e-9)) * 100, 1) if spd_b > 0 else 0.0
 
-        # Step 1: cause-based preference
+        # Update effects with consistent bias reduction pct
+        rew["effects"]["bias_reduction_pct"] = red_r
+        thr["effects"]["bias_reduction_pct"] = red_t
+
+        # Cause-based winner preference
         cause_winner = None
         cause_reason = None
-
         if predicted_cause == "proxy":
             cause_winner = "reweigh"
             cause_reason = (
                 "Reweighing is preferred for proxy discrimination. "
-                "It rebalances training data weights so the proxy feature "
-                "can no longer unfairly influence group outcomes."
+                "It rebalances group-outcome frequencies so proxy features "
+                "can no longer unfairly drive group disparities."
             )
         elif predicted_cause == "underrepresentation":
             cause_winner = "threshold"
             cause_reason = (
                 "Threshold Adjustment is preferred for underrepresentation. "
-                "It corrects the decision boundary per group directly, "
-                "compensating for the lack of minority training examples."
+                "It corrects the decision boundary per group, compensating for "
+                "the lack of minority training examples."
             )
         elif predicted_cause == "historical_skew":
             cause_winner = "reweigh"
             cause_reason = (
                 "Reweighing is preferred for historical bias. "
-                "It down-weights the historically over-represented patterns "
-                "so the model stops reproducing past discrimination."
+                "It down-weights historically over-represented group-outcome patterns."
             )
 
-        # Step 2: validate cause preference against actual results
-        # Override if the cause-preferred technique achieved < 5% bias reduction
+        # Validate cause preference against actual dataset-level SPD reduction
         if cause_winner == "reweigh" and red_r < 5:
             cause_winner = "threshold"
             cause_reason = (
-                "Threshold Adjustment is recommended because reweighing "
-                "achieved less than 5% bias reduction on this dataset, "
-                "suggesting the bias is in the decision boundary, not the weights."
+                f"Threshold adjustment is recommended because reweighing achieved "
+                f"only {red_r:.1f}% dataset-level bias reduction on this dataset. "
+                f"Note: bias reduction is measured from actual dataset outcome distributions."
             )
         elif cause_winner == "threshold" and red_t < 5:
             cause_winner = "reweigh"
             cause_reason = (
-                "Reweighing is recommended because threshold adjustment "
-                "achieved less than 5% bias reduction on this dataset."
+                f"Reweighing is recommended because threshold adjustment achieved "
+                f"only {red_t:.1f}% dataset-level bias reduction for this dataset."
             )
 
-        # Step 3: pure metric fallback if no cause available
+        # Pure metric fallback
         if cause_winner is None:
-            if red_r > red_t and acc_r >= 85:
+            rew_spd_b = rew["before"]["SPD"]
+            rew_spd_a = rew["after"]["SPD"]
+            thr_spd_a = thr["after"]["SPD"]
+            if red_r >= red_t:
                 cause_winner = "reweigh"
                 cause_reason = (
-                    f"Reweighing achieved {red_r:.0f}% bias reduction "
-                    f"with {acc_r:.0f}% accuracy retained."
-                )
-            elif red_t > red_r and acc_t >= 85:
-                cause_winner = "threshold"
-                cause_reason = (
-                    f"Threshold Adjustment achieved {red_t:.0f}% bias reduction "
-                    f"with {acc_t:.0f}% accuracy retained."
+                    f"Reweighing is recommended: it achieved {red_r:.1f}% dataset-level "
+                    f"bias reduction (SPD {rew_spd_b:.3f} → {rew_spd_a:.3f}). "
+                    f"These values are computed from actual dataset outcome distributions."
                 )
             else:
-                cause_winner = "reweigh" if spd_r <= spd_t else "threshold"
-                cause_reason = "Selected based on lowest resulting SPD value."
+                cause_winner = "threshold"
+                cause_reason = (
+                    f"Threshold adjustment is recommended: it achieved {red_t:.1f}% "
+                    f"bias reduction in the simulation model "
+                    f"(SPD {rew_spd_b:.3f} → {thr_spd_a:.3f}). "
+                    f"Note: threshold SPD/DI values are from a simulation model, not actual data."
+                )
 
-        winner        = cause_winner
+        winner = cause_winner
         winner_reason = cause_reason
 
         # Generate explanations
-        reweigh_explanation = self.generate_mitigation_explanation(
-            rew["before"], rew["after"],
-            "reweigh", sensitive_attr, rew["effects"]
+        rew["explanation"] = self.generate_mitigation_explanation(
+            rew["before"], rew["after"], "reweigh", sensitive_attr, rew["effects"]
         )
-        threshold_explanation = self.generate_mitigation_explanation(
-            thr["before"], thr["after"],
-            "threshold", sensitive_attr, thr["effects"]
+        thr["explanation"] = self.generate_mitigation_explanation(
+            thr["before"], thr["after"], "threshold", sensitive_attr, thr["effects"]
         )
-        
-        rew["explanation"] = reweigh_explanation
-        thr["explanation"] = threshold_explanation
-        
-        # Winner reasoning
-        if winner == "reweigh":
-            w_bias = rew["effects"].get("bias_reduction_pct", 0)
-            w_acc = rew["effects"].get("accuracy_retained_pct", 100)
-            l_bias = thr["effects"].get("bias_reduction_pct", 0)
-            l_acc = thr["effects"].get("accuracy_retained_pct", 100)
-            winner_reason = (
-                f"Reweighing is recommended because it achieved {w_bias:.0f}% "
-                f"bias reduction with {w_acc:.0f}% accuracy retained, "
-                f"outperforming threshold adjustment ({l_bias:.0f}% bias reduction, "
-                f"{l_acc:.0f}% accuracy retained)."
-            )
-        else:
-            w_bias = thr["effects"].get("bias_reduction_pct", 0)
-            w_acc = thr["effects"].get("accuracy_retained_pct", 100)
-            l_bias = rew["effects"].get("bias_reduction_pct", 0)
-            l_acc = rew["effects"].get("accuracy_retained_pct", 100)
-            winner_reason = (
-                f"Threshold adjustment is recommended because it achieved {w_bias:.0f}% "
-                f"bias reduction with {w_acc:.0f}% accuracy retained, "
-                f"outperforming reweighing ({l_bias:.0f}% bias reduction, "
-                f"{l_acc:.0f}% accuracy retained)."
-            )
 
         return {
             "reweigh": rew,
@@ -175,125 +259,143 @@ class BiasMitigator:
             "predicted_cause_used": predicted_cause,
             "model_info": {
                 "type": "GradientBoostingClassifier",
-                "note": "Internal simulation model for mitigation demonstration. Bias metrics SPD/DI/EOD/AOD are mathematical formulas independent of this model."
+                "note": (
+                    "Performance metrics (Acc/Precision/Recall/F1) come from an internal "
+                    "simulation model. Reweighing SPD and DI are computed from actual "
+                    "dataset outcome distributions. Threshold SPD/DI are from the simulation. "
+                    "EOD and AOD are not available (require real model predictions)."
+                ),
             },
         }
 
-    def generate_mitigation_explanation(self, before: dict, after: dict,
-                                        technique: str, sensitive_attr: str,
-                                        effects: dict) -> dict:
-        """Generate plain-English explanation of what mitigation did."""
-        
-        spd_before = abs(before.get("SPD", 0) or 0)
-        spd_after = abs(after.get("SPD", 0) or 0)
-        acc_before = before.get("accuracy", 0) or 0
-        acc_after = after.get("accuracy", 0) or 0
-        bias_reduction = effects.get("bias_reduction_pct", 0)
-        acc_retained = effects.get("accuracy_retained_pct", 100)
-        acc_delta = effects.get("accuracy_delta", 0)
-        
-        # What the technique actually did
+    # ── Explanation text ───────────────────────────────────────────────────────
+
+    def generate_mitigation_explanation(
+        self, before: dict, after: dict,
+        technique: str, sensitive_attr: str,
+        effects: dict,
+    ) -> dict:
+        """Generate plain-English explanation of what the mitigation technique did."""
+
+        spd_before     = abs(before.get("SPD") or 0)
+        spd_after      = abs(after.get("SPD") or 0)
+        acc_before     = before.get("accuracy")
+        acc_after      = after.get("accuracy")
+        bias_reduction = effects.get("bias_reduction_pct") or 0
+        is_simulation  = technique == "threshold"
+
         if technique == "reweigh":
             how_it_works = (
-                f"Reweighing works by giving more importance to underrepresented "
-                f"(group, outcome) combinations during training. For '{sensitive_attr}', "
-                f"cases where disadvantaged groups received positive outcomes were "
-                f"given higher weight, teaching the model to be more balanced."
+                f"Reweighing assigns higher statistical weight to under-represented "
+                f"(group, outcome) combinations in the training data. For "
+                f"'{sensitive_attr}', group-outcome pairs that were historically "
+                f"under-represented receive greater importance, rebalancing the "
+                f"learned outcome distribution."
             )
         else:
             how_it_works = (
-                f"Threshold Adjustment works by finding different decision thresholds "
-                f"for each group of '{sensitive_attr}'. Instead of using one cutoff "
-                f"for everyone, the model uses group-specific cutoffs that equalise "
-                f"the True Positive Rate â€” meaning equally qualified people from "
-                f"different groups get equal chances."
+                f"Threshold adjustment uses group-specific decision thresholds "
+                f"rather than a single global threshold for '{sensitive_attr}'. "
+                f"Each group gets its own cut-off probability, calibrated to "
+                f"equalise outcome rates across groups. "
+                f"Note: these values are from an internal simulation model because "
+                f"no real model predictions are available."
             )
-        
-        # What actually happened to bias
+
+        # Bias result — be explicit about what was measured
+        source_note = "" if not is_simulation else " (simulation model)"
         if spd_before == 0:
-            bias_result = "There was no measurable bias to reduce before mitigation."
-        elif bias_reduction >= 70:
+            bias_result = "No measurable dataset-level bias before mitigation (SPD = 0)."
+        elif bias_reduction >= 50:
             bias_result = (
-                f"Bias was significantly reduced. SPD dropped from {spd_before:.3f} "
-                f"to {spd_after:.3f} â€” a {bias_reduction:.0f}% reduction. "
-                f"In practical terms, the outcome gap between groups narrowed "
-                f"from {spd_before*100:.1f}% to {spd_after*100:.1f}%."
+                f"Bias{source_note} was substantially reduced. SPD moved from "
+                f"{spd_before:.3f} to {spd_after:.3f} — a {bias_reduction:.0f}% "
+                f"reduction in the outcome rate gap between groups."
             )
-        elif bias_reduction >= 30:
+        elif bias_reduction >= 10:
             bias_result = (
-                f"Bias was partially reduced. SPD dropped from {spd_before:.3f} "
-                f"to {spd_after:.3f} â€” a {bias_reduction:.0f}% improvement. "
-                f"Some gap remains between groups, but the disparity is meaningfully smaller."
+                f"Bias{source_note} was partially reduced. SPD moved from "
+                f"{spd_before:.3f} to {spd_after:.3f} — a {bias_reduction:.0f}% improvement."
             )
         elif bias_reduction > 0:
             bias_result = (
-                f"Bias reduction was modest â€” only {bias_reduction:.0f}%. "
+                f"Modest bias reduction{source_note} ({bias_reduction:.0f}%). "
                 f"SPD moved from {spd_before:.3f} to {spd_after:.3f}. "
-                f"This often happens when the bias is deeply embedded in the "
-                f"feature relationships rather than just class imbalance, "
-                f"or when the sensitive attribute has too many unique groups."
+                f"The bias may be embedded in feature correlations rather than "
+                f"group-outcome frequency imbalance."
             )
         else:
             bias_result = (
-                f"This technique did not reduce bias for '{sensitive_attr}'. "
-                f"SPD remained at {spd_after:.3f}. This can happen when bias "
-                f"is driven by a proxy feature that this technique cannot address, "
-                f"or when group sizes are very unequal."
+                f"This technique did not reduce bias for '{sensitive_attr}'{source_note}. "
+                f"SPD remained at approximately {spd_after:.3f}."
             )
-        
-        # What happened to accuracy
-        if abs(acc_delta) < 0.005:
-            acc_result = (
-                f"Model accuracy was virtually unchanged ({acc_before:.1%} â†’ "
-                f"{acc_after:.1%}), meaning fairness was improved at no real "
-                f"cost to predictive performance."
-            )
-        elif acc_delta < 0:
-            acc_result = (
-                f"Model accuracy dropped slightly from {acc_before:.1%} to "
-                f"{acc_after:.1%} (a {abs(acc_delta)*100:.1f}% reduction). "
-                f"This is the typical fairness-accuracy trade-off: making the "
-                f"model fairer for disadvantaged groups slightly reduces its "
-                f"overall optimisation. Whether this trade-off is acceptable "
-                f"is a business and ethical decision."
-            )
+
+        # Performance note (from simulation)
+        if acc_before is None or acc_after is None:
+            acc_result = "Performance metrics are not available."
         else:
-            acc_result = (
-                f"Interestingly, model accuracy slightly improved from "
-                f"{acc_before:.1%} to {acc_after:.1%}. This can happen when "
-                f"the original model was overfit to majority-group patterns, "
-                f"and mitigation forced it to learn more generalisable features."
-            )
-        
-        # What the graph is showing
+            acc_delta = acc_after - acc_before
+            sim_note = " (internal simulation — not real deployed model performance)"
+            if abs(acc_delta) < 0.005:
+                acc_result = (
+                    f"Simulation accuracy was virtually unchanged "
+                    f"({acc_before:.1%} → {acc_after:.1%}){sim_note}."
+                )
+            elif acc_delta < 0:
+                acc_result = (
+                    f"Simulation accuracy dropped from {acc_before:.1%} to "
+                    f"{acc_after:.1%} ({abs(acc_delta)*100:.1f}% reduction). "
+                    f"This illustrates the typical fairness-accuracy trade-off{sim_note}."
+                )
+            else:
+                acc_result = (
+                    f"Simulation accuracy improved slightly from {acc_before:.1%} to "
+                    f"{acc_after:.1%}{sim_note}."
+                )
+
         graph_explanation = (
-            f"The Fairness Improvement chart compares SPD, DI, EOD, and AOD " f"before mitigation (gray bars) vs after reweighing (teal) and after " f"threshold adjustment (purple). Shorter bars are better — they mean " f"the gap between groups is smaller. " f"IMPORTANT: EOD and AOD in this chart come from an internal simulation model " f"(GradientBoosting trained on your dataset), not from a real deployed model. " f"SPD and DI before mitigation reflect your actual dataset fairness."
-            f"the gap between groups is smaller. "
-            f"The Performance Trade-off chart plots each technique as a dot: "
-            f"further right means more bias reduction, higher up means more "
-            f"accuracy retained. The green 'Sweet Spot' zone is where both are high."
+            "The Fairness Improvement chart shows SPD and DI before and after mitigation. "
+            "Reweighing before/after SPD and DI are computed from actual dataset outcome "
+            "distributions (same formula as the analysis page). "
+            "Threshold adjustment values are from an internal GBM simulation model. "
+            "EOD and AOD are not shown -- they require real model predictions."
         )
-        
+
         return {
             "how_it_works": how_it_works,
             "bias_result": bias_result,
             "acc_result": acc_result,
             "graph_explanation": graph_explanation,
-            "summary": f"{bias_result} {acc_result}"
+            "summary": f"{bias_result} {acc_result}",
         }
 
-    # â”€â”€ Reweighing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Reweighing ─────────────────────────────────────────────────────────────
 
-    def reweigh(self, df, target_col, sensitive_attr):
-        import numpy as np
-        from sklearn.model_selection import train_test_split
-        from sklearn.preprocessing import LabelEncoder
-        from sklearn.metrics import (accuracy_score, precision_score,
-                                     recall_score, f1_score)
+    def reweigh(
+        self,
+        df: pd.DataFrame,
+        target_col: str,
+        sensitive_attr: str,
+        baseline_spd: float | None = None,
+        baseline_di: float | None = None,
+        baseline_group_stats: dict | None = None,
+    ) -> dict[str, Any]:
+        """
+        Genuine dataset-level reweighing.
 
+        - Uses IBM reweighing formula: w = P(G)*P(Y) / P(G,Y).
+        - Measures AFTER SPD/DI from weighted dataset positive rates (dataset-level).
+        - EOD and AOD = None (always — require external predictions).
+        - Also runs GBM simulation for performance metrics (labelled as simulation).
+        """
         df_work = df.copy().dropna(subset=[target_col, sensitive_attr])
 
-        # --- Binarize target first so leakage detection has __target__ available ---
+        # Apply same binning as BiasEngine
+        df_work["__sens_binned__"] = self._apply_binning(
+            df_work[sensitive_attr], sensitive_attr
+        )
+
+        # Binarize target
         y_raw = df_work[target_col]
         if set(y_raw.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
             y_bin = y_raw.astype(int)
@@ -304,141 +406,175 @@ class BiasMitigator:
             y_bin = (y_raw > y_raw.median()).astype(int)
         else:
             y_bin = (y_raw == y_raw.mode()[0]).astype(int)
-        df_work['__target__'] = y_bin
+        df_work["__y__"] = y_bin
 
-        # --- Encode target (for stratification) ---
-        le_t = LabelEncoder()
-        y_all = le_t.fit_transform(df_work['__target__'].astype(str))
+        # ── BEFORE: authoritative analysis baseline ──────────────────────────
+        if baseline_spd is not None and baseline_di is not None:
+            before_spd = float(baseline_spd)
+            before_di  = float(baseline_di)
+            before_gs  = baseline_group_stats or {}
+        else:
+            # Compute from dataset (same formula as BiasEngine) as fallback
+            before_spd, before_di, before_gs = self._dataset_spd_di(
+                df_work, "__y__", "__sens_binned__"
+            )
 
-        # --- Encode sensitive attr ---
-        le_s = LabelEncoder()
-        s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
+        before: dict[str, Any] = {
+            "SPD": round(before_spd, 4),
+            "DI":  round(before_di, 4) if before_di is not None else None,
+            "EOD": None,   # Not available — requires external model predictions
+            "AOD": None,   # Not available — requires external model predictions
+            "eod_available": False,
+            "aod_available": False,
+            "metrics_mode": "dataset_level",
+            "group_stats": before_gs,
+        }
 
-        # --- Encode ALL features (numeric + categorical), leakage auto-excluded ---
-        X_all, feature_cols = self._prepare_features(df_work, target_col, sensitive_attr)
+        # ── Compute IBM reweighing weights ───────────────────────────────────
         n = len(df_work)
+        le_s = LabelEncoder()
+        s_all = le_s.fit_transform(df_work["__sens_binned__"])
+        y_all = df_work["__y__"].values
 
-        # --- Compute reweighing weights on FULL dataset ---
-        # Weight formula: P(group)*P(label) / P(group AND label)
         weights = np.ones(n)
         for g in np.unique(s_all):
             for label in np.unique(y_all):
                 mask = (s_all == g) & (y_all == label)
-                n_gl = mask.sum()
+                n_gl = int(mask.sum())
                 if n_gl == 0:
                     continue
-                p_g = (s_all == g).sum() / n
-                p_l = (y_all == label).sum() / n
+                p_g  = float((s_all == g).sum()) / n
+                p_l  = float((y_all == label).sum()) / n
                 p_gl = n_gl / n
-                w = (p_g * p_l) / p_gl
-                weights[mask] = w
+                weights[mask] = (p_g * p_l) / p_gl
 
-        # Clip weights to prevent instability
         weights = np.clip(weights, 0.1, 10.0)
+        df_work["__weight__"] = weights
 
-        # --- Split AFTER computing weights so indices align ---
-        idx = np.arange(n)
-        idx_train, idx_test = train_test_split(
-            idx, test_size=0.3, random_state=42,
-            stratify=y_all
+        # ── AFTER: dataset-level SPD/DI from reweighted positive rates ───────
+        after_spd, after_di, after_gs = self._dataset_spd_di(
+            df_work, "__y__", "__sens_binned__", weight_col="__weight__"
         )
 
-        X_train = X_all[idx_train]
-        y_train = y_all[idx_train]
-        w_train = weights[idx_train]   # weights aligned with train split
-        X_test  = X_all[idx_test]
-        y_test  = y_all[idx_test]
-        s_test  = s_all[idx_test]
-
-        # --- BEFORE metrics (no weights) ---
-        model_before = GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            random_state=42
-        )
-        model_before.fit(X_train, y_train)
-        y_pred_before = model_before.predict(X_test)
-
-        before = {
-            "SPD":  round(float(self._compute_spd(y_pred_before, s_test)), 4),
-            "DI":   round(float(self._compute_di(y_pred_before, s_test)), 4),
-            "EOD":  self._compute_eod(y_pred_before, y_test, s_test),
-            "AOD":  self._compute_aod(y_pred_before, y_test, s_test),
-            "accuracy":  round(accuracy_score(y_test, y_pred_before), 4),
-            "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
-            "recall":    round(recall_score(y_test, y_pred_before, zero_division=0), 4),
-            "f1":        round(f1_score(y_test, y_pred_before, zero_division=0), 4),
-            "simulation_note": "EOD and AOD are computed by an internal GradientBoosting simulation model, not from your original dataset predictions.",
+        after: dict[str, Any] = {
+            "SPD": round(after_spd, 4),
+            "DI":  round(after_di, 4) if after_di is not None else None,
+            "EOD": None,
+            "AOD": None,
+            "eod_available": False,
+            "aod_available": False,
+            "metrics_mode": "dataset_level_reweighted",
+            "group_stats": after_gs,
         }
 
-        # --- AFTER metrics (WITH weights on training) ---
-        model_after = GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            random_state=42
+        # ── GBM simulation for performance metrics only ───────────────────────
+        sim_before, sim_after = self._run_simulation(
+            df_work, target_col, sensitive_attr, weights
         )
-        model_after.fit(X_train, y_train, sample_weight=w_train)
-        y_pred_after = model_after.predict(X_test)
 
-        after = {
-            "SPD":  round(float(self._compute_spd(y_pred_after, s_test)), 4),
-            "DI":   round(float(self._compute_di(y_pred_after, s_test)), 4),
-            "EOD":  self._compute_eod(y_pred_after, y_test, s_test),
-            "AOD":  self._compute_aod(y_pred_after, y_test, s_test),
-            "accuracy":  round(accuracy_score(y_test, y_pred_after), 4),
-            "precision": round(precision_score(y_test, y_pred_after, zero_division=0), 4),
-            "recall":    round(recall_score(y_test, y_pred_after, zero_division=0), 4),
-            "f1":        round(f1_score(y_test, y_pred_after, zero_division=0), 4),
-        }
+        SIM_NOTE = (
+            "Performance metrics come from an internal GBM simulation model, "
+            "not from a real deployed model."
+        )
+        if sim_before is not None:
+            before.update(sim_before)
+            before["simulation_note"] = SIM_NOTE
+        if sim_after is not None:
+            after.update(sim_after)
+            after["simulation_note"] = SIM_NOTE
 
-        spd_b = abs(before["SPD"])
-        spd_a = abs(after["SPD"])
-        improvement_pct = round(((spd_b - spd_a) / max(spd_b, 1e-9)) * 100, 1)
-        accuracy_retained = round((after["accuracy"] / max(before["accuracy"], 1e-9)) * 100, 1)
+        # ── Effects ──────────────────────────────────────────────────────────
+        spd_b = abs(before["SPD"] or 0)
+        spd_a = abs(after["SPD"] or 0)
+        bias_reduction_pct = (
+            round(((spd_b - spd_a) / max(spd_b, 1e-9)) * 100, 1)
+            if spd_b > 0 else 0.0
+        )
+        spd_delta = round((after["SPD"] or 0) - (before["SPD"] or 0), 4)
+        di_b = before.get("DI")
+        di_a = after.get("DI")
+        di_delta = (
+            round(di_a - di_b, 4) if di_b is not None and di_a is not None else None
+        )
+        acc_b = before.get("accuracy")
+        acc_a = after.get("accuracy")
+        acc_delta = (
+            round(acc_a - acc_b, 4)
+            if acc_b is not None and acc_a is not None else None
+        )
+        acc_retained = (
+            round(acc_a / max(acc_b, 1e-9) * 100, 1) if acc_b else None
+        )
 
-        if abs(improvement_pct) < 3:
+        diagnostic = None
+        if spd_b > 0.01 and bias_reduction_pct < 3:
             diagnostic = (
-                f"Low bias reduction ({improvement_pct:.1f}%) may occur when: "
-                f"(1) bias is driven by a proxy feature that survives weight adjustment, "
-                f"(2) the sensitive attribute has too many unique groups, or "
-                f"(3) the dataset is too small for statistical learning. "
-                f"The fairness metrics (SPD/DI) remain accurate â€” only the mitigation simulation was limited."
+                f"Low dataset-level bias reduction ({bias_reduction_pct:.1f}%) "
+                f"may occur when: (1) bias is driven by proxy features that survive "
+                f"weight rebalancing, (2) outcome distribution is weakly related to "
+                f"group membership, or (3) groups are already near-equal in size. "
+                f"SPD/DI values are accurate — computed from actual data."
             )
-        else:
-            diagnostic = None
 
-        effects = {
-            "accuracy_delta":  round(after["accuracy"]  - before["accuracy"],  4),
-            "precision_delta": round(after["precision"] - before["precision"], 4),
-            "recall_delta":    round(after["recall"]    - before["recall"],    4),
-            "f1_delta":        round(after["f1"]        - before["f1"],        4),
-            "spd_delta":       round(after["SPD"]       - before["SPD"],       4),
-            "bias_reduction_pct":   improvement_pct,
-            "accuracy_retained_pct": accuracy_retained,
-            "diagnostic": diagnostic,
+        effects: dict[str, Any] = {
+            "bias_reduction_pct":    bias_reduction_pct,
+            "spd_delta":             spd_delta,
+            "di_delta":              di_delta,
+            "accuracy_delta":        acc_delta,
+            "accuracy_retained_pct": acc_retained,
+            "diagnostic":            diagnostic,
         }
 
-        return {"before": before, "after": after, "effects": effects,
-                "improvement_pct": improvement_pct,
-                "weights_summary": {
-                    "min": round(float(weights.min()), 3),
-                    "max": round(float(weights.max()), 3),
-                    "mean": round(float(weights.mean()), 3)
-                }}
+        return {
+            "before": before,
+            "after":  after,
+            "effects": effects,
+            "improvement_pct": bias_reduction_pct,
+            "weights_summary": {
+                "min":  round(float(weights.min()), 3),
+                "max":  round(float(weights.max()), 3),
+                "mean": round(float(weights.mean()), 3),
+            },
+            "is_simulation": False,   # Reweighing SPD/DI = real dataset metrics
+            "simulation_note": (
+                "Dataset-level fairness metrics (SPD, DI) were evaluated before and "
+                "after applying reweighing weights to the dataset outcome distributions. "
+                "EOD and AOD were not evaluated because model predictions are not available. "
+                "Performance metrics (Acc/Precision/Recall/F1) come from an internal GBM "
+                "simulation model and are for illustration only."
+            ),
+        }
 
-    # â”€â”€ Threshold Adjustment â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Threshold Adjustment ───────────────────────────────────────────────────
 
-    def threshold_adjust(self, df: pd.DataFrame, target_col: str, sensitive_attr: str):
-        import numpy as np
+    def threshold_adjust(
+        self,
+        df: pd.DataFrame,
+        target_col: str,
+        sensitive_attr: str,
+        baseline_spd: float | None = None,
+        baseline_di: float | None = None,
+        baseline_group_stats: dict | None = None,
+    ) -> dict[str, Any]:
+        """
+        Threshold adjustment — operates on simulation model predictions.
 
-        df_clean = df.copy().dropna(subset=[target_col, sensitive_attr])
+        - "Before" uses the analysis baseline (same as reweighing for consistency).
+        - Trains a GBM simulation model internally.
+        - Finds per-group thresholds that minimise SPD in the simulation.
+        - "After" SPD/DI are from simulation model predictions (is_simulation=True).
+        - EOD and AOD: None always.
+        - All results are labelled as simulation.
+        """
+        df_work = df.copy().dropna(subset=[target_col, sensitive_attr])
+
+        # Apply same binning as BiasEngine
+        df_work["__sens_binned__"] = self._apply_binning(
+            df_work[sensitive_attr], sensitive_attr
+        )
 
         # Binarize target
-        y_raw = df_clean[target_col]
+        y_raw = df_work[target_col]
         if set(y_raw.dropna().unique()).issubset({0, 1, 0.0, 1.0}):
             y_bin = y_raw.astype(int)
         elif y_raw.nunique() == 2:
@@ -448,24 +584,46 @@ class BiasMitigator:
             y_bin = (y_raw > y_raw.median()).astype(int)
         else:
             y_bin = (y_raw == y_raw.mode()[0]).astype(int)
-        df_clean['__target__'] = y_bin
+        df_work["__y__"] = y_bin
 
-        # Encode sensitive attr
-        from sklearn.preprocessing import LabelEncoder
+        # ── BEFORE: same analysis baseline as reweighing ──────────────────────
+        if baseline_spd is not None and baseline_di is not None:
+            before_spd = float(baseline_spd)
+            before_di  = float(baseline_di)
+            before_gs  = baseline_group_stats or {}
+        else:
+            before_spd, before_di, before_gs = self._dataset_spd_di(
+                df_work, "__y__", "__sens_binned__"
+            )
+
+        before: dict[str, Any] = {
+            "SPD": round(before_spd, 4),
+            "DI":  round(before_di, 4) if before_di is not None else None,
+            "EOD": None,
+            "AOD": None,
+            "eod_available": False,
+            "aod_available": False,
+            "metrics_mode": "dataset_level",
+            "group_stats": before_gs,
+        }
+
+        # ── Simulation model ──────────────────────────────────────────────────
         le_s = LabelEncoder()
-        df_clean['__sens__'] = le_s.fit_transform(df_clean[sensitive_attr].astype(str))
+        s_all = le_s.fit_transform(df_work["__sens_binned__"])
+        y_all = df_work["__y__"].values
 
-        # Get arrays
-        y_all = df_clean['__target__'].values
-        s_all = df_clean['__sens__'].values
+        X_all, _ = self._prepare_features(df_work, target_col, sensitive_attr)
 
-        # Encode ALL features using the shared helper (leakage excluded)
-        X_all, _ = self._prepare_features(df_clean, target_col, sensitive_attr)
-
-        idx = np.arange(len(df_clean))
-        idx_train, idx_test = train_test_split(
-            idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE, stratify=y_all
-        )
+        idx = np.arange(len(df_work))
+        try:
+            idx_train, idx_test = train_test_split(
+                idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE,
+                stratify=y_all,
+            )
+        except ValueError:
+            idx_train, idx_test = train_test_split(
+                idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE,
+            )
 
         X_train = X_all[idx_train]
         X_test  = X_all[idx_test]
@@ -474,38 +632,30 @@ class BiasMitigator:
         s_test  = s_all[idx_test]
 
         model = GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            random_state=42
+            n_estimators=150, max_depth=3, learning_rate=0.05,
+            subsample=0.8, random_state=self.RANDOM_STATE,
         )
         model.fit(X_train, y_train)
-
-        # Get probabilities on test set
         proba = model.predict_proba(X_test)[:, 1]
 
-        # Compute BEFORE metrics (standard 0.5 threshold)
+        # Before threshold (0.5 global)
         y_pred_before = (proba >= 0.5).astype(int)
-        before_metrics = {
-            "SPD": self._compute_spd(y_pred_before, s_test),
-            "DI": self._compute_di(y_pred_before, s_test),
-            "EOD": self._compute_eod(y_pred_before, y_test, s_test),
-            "AOD": self._compute_aod(y_pred_before, y_test, s_test),
-            "accuracy": round(accuracy_score(y_test, y_pred_before), 4),
-            "precision": round(precision_score(y_test, y_pred_before, zero_division=0), 4),
-            "recall": round(recall_score(y_test, y_pred_before, zero_division=0), 4),
-            "f1": round(f1_score(y_test, y_pred_before, zero_division=0), 4),
-        }
 
-        # Find per-group thresholds that equalize TPR
-        # Strategy: grid search thresholds per group, minimize TPR difference
+        # Before simulation performance
+        before["accuracy"]  = round(float(accuracy_score(y_test, y_pred_before)), 4)
+        before["precision"] = round(float(precision_score(y_test, y_pred_before, zero_division=0)), 4)
+        before["recall"]    = round(float(recall_score(y_test, y_pred_before, zero_division=0)), 4)
+        before["f1"]        = round(float(f1_score(y_test, y_pred_before, zero_division=0)), 4)
+        before["simulation_note"] = (
+            "Performance metrics come from an internal GBM simulation model, "
+            "not from a real deployed model."
+        )
+
+        # ── Per-group threshold search to minimise SPD in simulation ──────────
         groups = np.unique(s_test)
-        best_thresholds = {}
-        best_spd = float('inf')
-
-        # Try threshold pairs from 0.2 to 0.8 in steps of 0.05
         threshold_range = np.arange(0.2, 0.81, 0.05)
+        best_thresholds: dict = {g: 0.5 for g in groups}
+        best_spd_sim = float("inf")
 
         if len(groups) == 2:
             g0, g1 = groups[0], groups[1]
@@ -514,256 +664,191 @@ class BiasMitigator:
                     y_adj = np.zeros(len(proba), dtype=int)
                     y_adj[s_test == g0] = (proba[s_test == g0] >= t0).astype(int)
                     y_adj[s_test == g1] = (proba[s_test == g1] >= t1).astype(int)
-
-                    # Skip if recall collapses to 0 for any group with positive examples
-                    has_pos0 = (y_test[s_test == g0] == 1).sum() > 0
-                    has_pos1 = (y_test[s_test == g1] == 1).sum() > 0
-                    rec0 = recall_score(y_test[s_test == g0], y_adj[s_test == g0], zero_division=0)
-                    rec1 = recall_score(y_test[s_test == g1], y_adj[s_test == g1], zero_division=0)
-                    if (has_pos0 and rec0 < 0.05) or (has_pos1 and rec1 < 0.05):
-                        continue
-
-                    spd = abs(self._compute_spd(y_adj, s_test))
-                    if spd < best_spd:
-                        best_spd = spd
+                    rates = {g: float(y_adj[s_test == g].mean()) for g in groups}
+                    spd_sim = abs(min(rates.values()) - max(rates.values()))
+                    if spd_sim < best_spd_sim:
+                        best_spd_sim = spd_sim
                         best_thresholds = {g0: t0, g1: t1}
         else:
-            # For multi-group: use uniform threshold that minimizes overall SPD
-            # while keeping recall > 0.05 per group
             for t in threshold_range:
                 y_adj = (proba >= t).astype(int)
-                recalls = [recall_score(y_test[s_test == g], y_adj[s_test == g], zero_division=0)
-                           for g in groups]
-                if min(recalls) < 0.05:
-                    continue
-                spd = abs(self._compute_spd(y_adj, s_test))
-                if spd < best_spd:
-                    best_spd = spd
+                rates = {g: float(y_adj[s_test == g].mean()) for g in groups}
+                spd_sim = abs(min(rates.values()) - max(rates.values()))
+                if spd_sim < best_spd_sim:
+                    best_spd_sim = spd_sim
                     best_thresholds = {g: t for g in groups}
-
-        # If no valid thresholds found, fall back to 0.5 for all groups
-        if not best_thresholds:
-            best_thresholds = {g: 0.5 for g in groups}
 
         # Apply best thresholds
         y_pred_after = np.zeros(len(proba), dtype=int)
         for g, thresh in best_thresholds.items():
             y_pred_after[s_test == g] = (proba[s_test == g] >= thresh).astype(int)
 
-        after_metrics = {
-            "SPD": self._compute_spd(y_pred_after, s_test),
-            "DI": self._compute_di(y_pred_after, s_test),
-            "EOD": self._compute_eod(y_pred_after, y_test, s_test),
-            "AOD": self._compute_aod(y_pred_after, y_test, s_test),
-            "accuracy": round(accuracy_score(y_test, y_pred_after), 4),
-            "precision": round(precision_score(y_test, y_pred_after, zero_division=0), 4),
-            "recall": round(recall_score(y_test, y_pred_after, zero_division=0), 4),
-            "f1": round(f1_score(y_test, y_pred_after, zero_division=0), 4),
-        }
+        # After simulation SPD/DI from prediction rates
+        sim_rates = {g: float(y_pred_after[s_test == g].mean()) for g in groups}
+        priv_sim   = max(sim_rates.values())
+        unpriv_sim = min(sim_rates.values())
+        after_spd_sim = round(unpriv_sim - priv_sim, 4)
+        after_di_sim  = round(unpriv_sim / priv_sim, 4) if priv_sim > 0 else None
 
-        spd_before = abs(before_metrics["SPD"])
-        spd_after = abs(after_metrics["SPD"])
-        improvement_pct = round(((spd_before - spd_after) / max(spd_before, 1e-9)) * 100, 1)
-        accuracy_retained = round((after_metrics["accuracy"] / max(before_metrics["accuracy"], 1e-9)) * 100, 1)
-
-        if abs(improvement_pct) < 3:
-            diagnostic = (
-                f"Low bias reduction ({improvement_pct:.1f}%) may occur when: "
-                f"(1) bias is driven by a proxy feature that survives threshold adjustment, "
-                f"(2) the sensitive attribute has too many unique groups, or "
-                f"(3) the dataset is too small for statistical learning. "
-                f"The fairness metrics (SPD/DI) remain accurate â€” only the mitigation simulation was limited."
-            )
-        else:
-            diagnostic = None
-
-        effects = {
-            "accuracy_delta": round(after_metrics["accuracy"] - before_metrics["accuracy"], 4),
-            "precision_delta": round(after_metrics["precision"] - before_metrics["precision"], 4),
-            "recall_delta": round(after_metrics["recall"] - before_metrics["recall"], 4),
-            "f1_delta": round(after_metrics["f1"] - before_metrics["f1"], 4),
-            "spd_delta": round(after_metrics["SPD"] - before_metrics["SPD"], 4),
-            "bias_reduction_pct": improvement_pct,
-            "accuracy_retained_pct": accuracy_retained,
-            "diagnostic": diagnostic,
-        }
-
-        return {
-            "before": before_metrics,
-            "after": after_metrics,
-            "effects": effects,
-            "improvement_pct": improvement_pct,
-            "thresholds": {str(k): round(float(v), 2) for k, v in best_thresholds.items()},
-        }
-
-    # â”€â”€ Effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-    @staticmethod
-    def effects(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-        """Compute delta metrics between before and after mitigation."""
-        def delta(key: str) -> float | None:
-            b = before.get(key)
-            a = after.get(key)
-            if b is None or a is None:
-                return None
-            return round(float(a) - float(b), 4)
-
-        spd_before = abs(before.get("spd", 0) or 0)
-        spd_after = abs(after.get("spd", 0) or 0)
-        bias_reduction_pct = (
-            round((spd_before - spd_after) / spd_before * 100, 2)
-            if spd_before > 0
-            else 0.0
+        SIM_NOTE = (
+            "SPD/DI and performance metrics here come from an internal GBM simulation model. "
+            "Threshold adjustment requires real model prediction scores -- "
+            "these values illustrate the technique but are not real measurements."
         )
 
-        acc_before = before.get("accuracy", 1) or 1
-        acc_after = after.get("accuracy", 1) or 1
-        accuracy_retained_pct = round(acc_after / acc_before * 100, 2) if acc_before > 0 else 100.0
-
-        return {
-            "accuracy_delta": delta("accuracy"),
-            "precision_delta": delta("precision"),
-            "recall_delta": delta("recall"),
-            "f1_delta": delta("f1"),
-            "spd_delta": delta("spd"),
-            "bias_reduction_pct": bias_reduction_pct,
-            "accuracy_retained_pct": accuracy_retained_pct,
+        after: dict[str, Any] = {
+            "SPD": after_spd_sim,
+            "DI":  after_di_sim,
+            "EOD": None,
+            "AOD": None,
+            "eod_available": False,
+            "aod_available": False,
+            "metrics_mode": "simulation",
+            "accuracy":  round(float(accuracy_score(y_test, y_pred_after)), 4),
+            "precision": round(float(precision_score(y_test, y_pred_after, zero_division=0)), 4),
+            "recall":    round(float(recall_score(y_test, y_pred_after, zero_division=0)), 4),
+            "f1":        round(float(f1_score(y_test, y_pred_after, zero_division=0)), 4),
+            "simulation_note": SIM_NOTE,
+            "group_stats": {},
         }
 
-    # â”€â”€ Core metric computation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ── Effects ───────────────────────────────────────────────────────────
+        spd_b = abs(before["SPD"] or 0)
+        spd_a = abs(after["SPD"] or 0)
+        bias_reduction_pct = (
+            round(((spd_b - spd_a) / max(spd_b, 1e-9)) * 100, 1)
+            if spd_b > 0 else 0.0
+        )
+        spd_delta = round((after["SPD"] or 0) - (before["SPD"] or 0), 4)
+        di_b = before.get("DI")
+        di_a = after.get("DI")
+        di_delta = (
+            round(di_a - di_b, 4) if di_b is not None and di_a is not None else None
+        )
+        acc_b = before.get("accuracy")
+        acc_a = after.get("accuracy")
+        acc_delta = (
+            round(acc_a - acc_b, 4)
+            if acc_b is not None and acc_a is not None else None
+        )
+        acc_retained = (
+            round(acc_a / max(acc_b, 1e-9) * 100, 1) if acc_b else None
+        )
 
-    def _compute_metrics(
+        diagnostic = None
+        if spd_b > 0.01 and bias_reduction_pct < 3:
+            diagnostic = (
+                f"Low simulation bias reduction ({bias_reduction_pct:.1f}%) from "
+                f"threshold adjustment. Note: the dataset-level SPD = "
+                f"{before['SPD']:.3f} (from actual data -- see analysis page). "
+                f"These simulation values are for illustration only."
+            )
+
+        effects: dict[str, Any] = {
+            "bias_reduction_pct":    bias_reduction_pct,
+            "spd_delta":             spd_delta,
+            "di_delta":              di_delta,
+            "accuracy_delta":        acc_delta,
+            "accuracy_retained_pct": acc_retained,
+            "diagnostic":            diagnostic,
+        }
+
+        return {
+            "before": before,
+            "after":  after,
+            "effects": effects,
+            "improvement_pct": bias_reduction_pct,
+            "thresholds": {str(k): round(float(v), 2) for k, v in best_thresholds.items()},
+            "is_simulation": True,   # Threshold SPD/DI = simulation model
+            "simulation_note": (
+                "Threshold adjustment requires model decision scores. Without real "
+                "model predictions, an internal GBM simulation was used to demonstrate "
+                "the technique. Before/after SPD and DI for threshold adjustment are "
+                "from simulation predictions, not from actual dataset outcome distributions. "
+                "EOD and AOD are not available."
+            ),
+        }
+
+    # ── GBM simulation helper ─────────────────────────────────────────────────
+
+    def _run_simulation(
         self,
-        df: pd.DataFrame,
+        df_work: pd.DataFrame,
         target_col: str,
         sensitive_attr: str,
-        sample_weight: np.ndarray | None = None,
-    ) -> dict[str, Any]:
+        weights: np.ndarray | None = None,
+    ) -> tuple:
         """
-        Stratified 70/30 split â†’ train GradientBoostingClassifier (with optional weights) â†’
-        compute fairness + performance metrics on the held-out test set.
+        Run a GBM simulation before (no weights) and after (with weights).
+        Returns (before_perf, after_perf) dicts with accuracy/precision/recall/f1.
+        Returns (None, None) if not enough data or error.
         """
-        from sklearn.preprocessing import LabelEncoder
-        df_work = df.dropna(subset=[target_col, sensitive_attr]).copy()
+        try:
+            y_all = df_work["__y__"].values
+            X_all, _ = self._prepare_features(df_work, target_col, sensitive_attr)
 
-        le_t = LabelEncoder()
-        y_all = le_t.fit_transform(df_work[target_col].astype(str))
+            idx = np.arange(len(df_work))
+            try:
+                idx_train, idx_test = train_test_split(
+                    idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE,
+                    stratify=y_all,
+                )
+            except ValueError:
+                idx_train, idx_test = train_test_split(
+                    idx, test_size=self.TEST_SIZE, random_state=self.RANDOM_STATE,
+                )
 
-        le_s = LabelEncoder()
-        s_all = le_s.fit_transform(df_work[sensitive_attr].astype(str))
+            X_train, X_test = X_all[idx_train], X_all[idx_test]
+            y_train, y_test = y_all[idx_train], y_all[idx_test]
 
-        X_all, _ = self._prepare_features(df_work, target_col, sensitive_attr)
-
-        idx = np.arange(len(df_work))
-        idx_train, idx_test = train_test_split(
-            idx,
-            test_size=self.TEST_SIZE,
-            random_state=self.RANDOM_STATE,
-            stratify=y_all,
-        )
-
-        X_train = X_all[idx_train]
-        X_test  = X_all[idx_test]
-        y_train = y_all[idx_train]
-        y_test  = y_all[idx_test]
-        s_test  = s_all[idx_test]
-
-        train_weights = sample_weight[idx_train] if sample_weight is not None else None
-
-        clf = GradientBoostingClassifier(
-            n_estimators=200,
-            max_depth=4,
-            learning_rate=0.05,
-            subsample=0.8,
-            random_state=self.RANDOM_STATE
-        )
-        clf.fit(X_train, y_train, sample_weight=train_weights)
-        y_pred = clf.predict(X_test)
-
-        return self._metrics_from_arrays(y_test, y_pred, s_test, df_work[sensitive_attr])
-
-    def _metrics_from_arrays(
-        self,
-        y_test: np.ndarray,
-        y_pred: np.ndarray,
-        s_test: np.ndarray,
-        sensitive_series: pd.Series,
-    ) -> dict[str, Any]:
-        """Compute all metrics from raw arrays."""
-        # Performance
-        accuracy = round(float(accuracy_score(y_test, y_pred)), 4)
-        precision = round(float(precision_score(y_test, y_pred, zero_division=0)), 4)
-        recall = round(float(recall_score(y_test, y_pred, zero_division=0)), 4)
-        f1 = round(float(f1_score(y_test, y_pred, zero_division=0)), 4)
-
-        # Positive rates per group
-        groups = np.unique(s_test)
-        pos_rates: dict[str, float] = {}
-        for g in groups:
-            mask = s_test == g
-            pos_rates[str(g)] = round(float(y_pred[mask].mean()), 4)
-
-        if len(groups) >= 2:
-            privileged = max(pos_rates, key=lambda k: pos_rates[k])
-            unprivileged = min(pos_rates, key=lambda k: pos_rates[k])
-            pr_priv = pos_rates[privileged]
-            pr_unpriv = pos_rates[unprivileged]
-
-            spd = round(pr_priv - pr_unpriv, 4)
-            di = round(pr_unpriv / pr_priv, 4) if pr_priv > 0 else None
-
-            # TPR per group
-            tpr_vals = {}
-            fpr_vals = {}
-            for g in groups:
-                mask = s_test == g
-                yg, pg = y_test[mask], y_pred[mask]
-                tp = int(((pg == 1) & (yg == 1)).sum())
-                fn = int(((pg == 0) & (yg == 1)).sum())
-                fp = int(((pg == 1) & (yg == 0)).sum())
-                tn = int(((pg == 0) & (yg == 0)).sum())
-                tpr_vals[str(g)] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-                fpr_vals[str(g)] = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-
-            eod = round(tpr_vals[privileged] - tpr_vals[unprivileged], 4)
-            aod = round(
-                ((tpr_vals[privileged] - tpr_vals[unprivileged]) +
-                 (fpr_vals[privileged] - fpr_vals[unprivileged])) / 2,
-                4,
+            # Before (no weights)
+            m1 = GradientBoostingClassifier(
+                n_estimators=150, max_depth=3, learning_rate=0.05,
+                subsample=0.8, random_state=self.RANDOM_STATE,
             )
-        else:
-            spd = 0.0
-            di = None
-            eod = None
-            aod = None
+            m1.fit(X_train, y_train)
+            p1 = m1.predict(X_test)
+            sim_before = {
+                "accuracy":  round(float(accuracy_score(y_test, p1)), 4),
+                "precision": round(float(precision_score(y_test, p1, zero_division=0)), 4),
+                "recall":    round(float(recall_score(y_test, p1, zero_division=0)), 4),
+                "f1":        round(float(f1_score(y_test, p1, zero_division=0)), 4),
+            }
 
-        return {
-            "accuracy": accuracy,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "spd": spd,
-            "di": di,
-            "eod": eod,
-            "aod": aod,
-            "positive_rates_per_group": pos_rates,
-        }
+            if weights is None:
+                return sim_before, None
 
-    # â”€â”€ Feature preparation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            w_train = weights[idx_train]
+            m2 = GradientBoostingClassifier(
+                n_estimators=150, max_depth=3, learning_rate=0.05,
+                subsample=0.8, random_state=self.RANDOM_STATE,
+            )
+            m2.fit(X_train, y_train, sample_weight=w_train)
+            p2 = m2.predict(X_test)
+            sim_after = {
+                "accuracy":  round(float(accuracy_score(y_test, p2)), 4),
+                "precision": round(float(precision_score(y_test, p2, zero_division=0)), 4),
+                "recall":    round(float(recall_score(y_test, p2, zero_division=0)), 4),
+                "f1":        round(float(f1_score(y_test, p2, zero_division=0)), 4),
+            }
+            return sim_before, sim_after
+
+        except Exception as exc:
+            print(f"[Mitigator] Simulation failed: {exc}")
+            return None, None
+
+    # ── Feature preparation ────────────────────────────────────────────────────
 
     def _prepare_features(self, df_work, target_col, sensitive_attr):
-        import numpy as np
-        from sklearn.preprocessing import LabelEncoder
-
-        # Build base exclusion set
+        """Encode all features except target/sensitive/internal columns."""
         exclude = {
             target_col, sensitive_attr,
-            '__target__', '__sens__', '__y__', '__s__'
+            "__target__", "__sens__", "__y__", "__s__",
+            "__sens_binned__", "__weight__", "__sens_raw__", "__y_tmp__",
         }
 
-        # Detect leaking columns by correlation with target
         y_vals = None
-        for y_candidate in ['__target__', target_col]:
+        for y_candidate in ["__y__", "__target__", target_col]:
             if y_candidate in df_work.columns:
                 try:
                     y_vals = df_work[y_candidate].astype(float)
@@ -777,11 +862,11 @@ class BiasMitigator:
                 if col in exclude:
                     continue
                 try:
-                    if df_work[col].dtype in ['int64', 'float64', 'int32', 'float32']:
+                    if df_work[col].dtype in ["int64", "float64", "int32", "float32"]:
                         corr = abs(float(df_work[col].corr(y_vals)))
                     else:
                         enc = LabelEncoder().fit_transform(
-                            df_work[col].fillna('missing').astype(str))
+                            df_work[col].fillna("missing").astype(str))
                         corr = abs(float(np.corrcoef(enc, y_vals)[0, 1]))
                     if corr > 0.90:
                         leaking.add(col)
@@ -789,124 +874,69 @@ class BiasMitigator:
                 except Exception:
                     pass
 
-        # Name-based leakage: e.g. target='income_binary' â†’ exclude 'income'
         target_base = (target_col
-                       .replace('_binary', '').replace('_encoded', '')
-                       .replace('_label', '').replace('_num', '').lower())
+                       .replace("_binary", "").replace("_encoded", "")
+                       .replace("_label", "").replace("_num", "").lower())
         for col in df_work.columns:
             if col in exclude or col in leaking:
                 continue
-            if (target_base in col.lower() and col.lower() != target_col.lower()):
+            if target_base in col.lower() and col.lower() != target_col.lower():
                 leaking.add(col)
-                print(f"[Mitigator] NAME LEAKAGE '{col}' excluded")
 
-        # Also exclude the original target variants
-        for col in df_work.columns:
-            if col in exclude or col in leaking:
-                continue
-            col_lower = col.lower()
-            if col_lower in ['income', 'salary', 'label', 'target', 'outcome',
-                              'result', 'class', 'prediction', 'score']:
-                if col_lower != target_col.lower():
-                    leaking.add(col)
-                    print(f"[Mitigator] KEYWORD LEAKAGE '{col}' excluded")
-
-        all_exclude = exclude | leaking
-        feature_cols = [c for c in df_work.columns if c not in all_exclude]
-
+        feature_cols = [
+            c for c in df_work.columns
+            if c not in exclude and c not in leaking
+        ]
         if not feature_cols:
-            raise ValueError(
-                f"No valid features after excluding target, sensitive attr, "
-                f"and {len(leaking)} leaking columns: {leaking}"
-            )
+            feature_cols = [sensitive_attr] if sensitive_attr in df_work.columns else []
 
         X_parts = []
         for col in feature_cols:
-            col_data = df_work[col].copy()
-            if col_data.dtype in ['int64', 'float64', 'int32', 'float32']:
-                filled = col_data.fillna(col_data.median())
-                X_parts.append(filled.values.reshape(-1, 1).astype(float))
-            else:
-                le = LabelEncoder()
-                encoded = le.fit_transform(col_data.fillna('missing').astype(str))
-                X_parts.append(encoded.reshape(-1, 1).astype(float))
+            try:
+                if df_work[col].dtype in ["int64", "float64", "int32", "float32"]:
+                    X_parts.append(df_work[[col]].values.astype(float))
+                else:
+                    enc = LabelEncoder().fit_transform(
+                        df_work[col].fillna("missing").astype(str))
+                    X_parts.append(enc.reshape(-1, 1).astype(float))
+            except Exception:
+                pass
+
+        if not X_parts:
+            return np.zeros((len(df_work), 1)), []
 
         return np.hstack(X_parts), feature_cols
 
-    # â”€â”€ Winner selection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Legacy static helper (kept for router compatibility) ──────────────────
 
     @staticmethod
-    def _pick_winner(rew: dict, thr: dict) -> str:
-        """
-        Choose the better strategy:
-        - Prefer the one with the greater bias reduction (SPD drop).
-        - If both achieve similar bias reduction (within 5%), prefer the one
-          with higher accuracy retained.
-        """
-        rew_eff = rew.get("effects", {})
-        thr_eff = thr.get("effects", {})
-
-        rew_bias = rew_eff.get("bias_reduction_pct", 0) or 0
-        thr_bias = thr_eff.get("bias_reduction_pct", 0) or 0
-        rew_acc = rew_eff.get("accuracy_retained_pct", 100) or 100
-        thr_acc = thr_eff.get("accuracy_retained_pct", 100) or 100
-
-        if abs(rew_bias - thr_bias) <= 5.0:
-            # Similar bias reduction â†’ prefer higher accuracy
-            return "reweigh" if rew_acc >= thr_acc else "threshold"
-        return "reweigh" if rew_bias >= thr_bias else "threshold"
-
-    def _compute_spd(self, y_pred, s):
-        groups = np.unique(s)
-        if len(groups) < 2:
-            return 0.0
-        rates = {g: np.mean(y_pred[s == g]) for g in groups}
-        priv = max(rates, key=rates.get)
-        unpriv = min(rates, key=rates.get)
-        return round(float(rates[priv] - rates[unpriv]), 4)
-
-    def _compute_di(self, y_pred, s):
-        groups = np.unique(s)
-        if len(groups) < 2:
-            return 1.0
-        rates = {g: np.mean(y_pred[s == g]) for g in groups}
-        priv_rate = max(rates.values())
-        unpriv_rate = min(rates.values())
-        if priv_rate == 0:
-            return 1.0
-        return round(float(unpriv_rate / priv_rate), 4)
-
-    def _compute_eod(self, y_pred, y_true, s):
-        from sklearn.metrics import recall_score
-        groups = np.unique(s)
-        if len(groups) < 2:
-            return 0.0
-        tprs = {}
-        for g in groups:
-            mask = s == g
-            if sum(y_true[mask]) == 0:
+    def effects(before: dict, after: dict) -> dict:
+        """Legacy method. Compute delta metrics between before and after."""
+        def delta(key: str):
+            b = before.get(key)
+            a = after.get(key)
+            if b is None or a is None:
                 return None
-            tprs[g] = recall_score(y_true[mask], y_pred[mask], zero_division=0)
-        priv = max(tprs, key=tprs.get)
-        unpriv = min(tprs, key=tprs.get)
-        return round(float(tprs[priv] - tprs[unpriv]), 4)
+            return round(float(a) - float(b), 4)
 
-    def _compute_aod(self, y_pred, y_true, s):
-        groups = np.unique(s)
-        if len(groups) < 2:
-            return 0.0
-        tprs, fprs = {}, {}
-        for g in groups:
-            mask = s == g
-            pos_mask = y_true[mask] == 1
-            neg_mask = y_true[mask] == 0
-            if sum(pos_mask) == 0 or sum(neg_mask) == 0:
-                return None
-            tprs[g] = np.mean(y_pred[mask][pos_mask])
-            fprs[g] = np.mean(y_pred[mask][neg_mask])
-        groups_list = list(groups)
-        tpr_diff = abs(tprs[groups_list[0]] - tprs[groups_list[1]])
-        fpr_diff = abs(fprs[groups_list[0]] - fprs[groups_list[1]])
-        return round(float((tpr_diff + fpr_diff) / 2), 4)
+        spd_before = abs(before.get("SPD") or before.get("spd") or 0)
+        spd_after  = abs(after.get("SPD")  or after.get("spd")  or 0)
+        bias_reduction_pct = (
+            round((spd_before - spd_after) / spd_before * 100, 2)
+            if spd_before > 0 else 0.0
+        )
+        acc_before = before.get("accuracy", 1) or 1
+        acc_after  = after.get("accuracy", 1)  or 1
+        accuracy_retained_pct = (
+            round(acc_after / acc_before * 100, 2) if acc_before > 0 else 100.0
+        )
 
-
+        return {
+            "accuracy_delta":        delta("accuracy"),
+            "precision_delta":       delta("precision"),
+            "recall_delta":          delta("recall"),
+            "f1_delta":              delta("f1"),
+            "spd_delta":             delta("SPD") or delta("spd"),
+            "bias_reduction_pct":    bias_reduction_pct,
+            "accuracy_retained_pct": accuracy_retained_pct,
+        }
