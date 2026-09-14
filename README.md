@@ -20,7 +20,7 @@
 
 ---
 
-## What it is
+## What is FairEnough?
 
 FairEnough is an automated end-to-end algorithmic bias diagnosis and remediation tool. When tabular datasets are used for high-stakes automated decisions (such as credit scoring, hiring, medical triage, or loan approvals), inherent historical or collection biases can lead to discriminatory outcomes against protected groups (e.g., based on gender, race, age). 
 
@@ -28,7 +28,7 @@ FairEnough acts as a governance firewall between raw datasets/models and deploym
 
 ---
 
-## Why required
+## Why FairEnough is required?
 
 As AI systems become ubiquitous in decision-making, ensuring algorithmic fairness is no longer optional—it is a critical regulatory, ethical, and legal mandate.
 
@@ -52,7 +52,7 @@ As AI systems become ubiquitous in decision-making, ensuring algorithmic fairnes
 
 ---
 
-## How it works
+## How FairEnough works
 
 ```
  📥 1. Upload Dataset
@@ -81,7 +81,7 @@ As AI systems become ubiquitous in decision-making, ensuring algorithmic fairnes
 
 ---
 
-## Which methods used
+## Methods Applied
 
 FairEnough combines rigorous statistical fairness formulas with machine learning pre/post-processing algorithms:
 
