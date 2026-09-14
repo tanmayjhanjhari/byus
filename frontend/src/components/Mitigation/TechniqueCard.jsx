@@ -139,6 +139,17 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
         </div>
       )}
 
+      {/* Real Model Failure / Unavailable error state */}
+      {(data.error || after?.error) && (
+        <div className="mb-4 flex items-start gap-2 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2 text-red-400">
+          <Info size={14} className="flex-shrink-0 mt-0.5 text-red-400" />
+          <div>
+            <p className="text-xs font-semibold">Real model evaluation unavailable</p>
+            <p className="text-xs text-red-300/80 leading-relaxed mt-0.5">{data.error || after?.error}</p>
+          </div>
+        </div>
+      )}
+
       {/* Fairness Deltas */}
       <div className="mb-6">
         <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-2 border-b border-white/[0.06] pb-2">
@@ -173,10 +184,17 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
         <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-2 border-b border-white/[0.06] pb-2">
           Performance Trade-off
         </h4>
-        <div className="flex items-start gap-1.5 mb-3 bg-amber-500/5 border border-amber-500/12 rounded px-2 py-1.5">
-          <Info size={11} className="text-amber-400/60 flex-shrink-0 mt-0.5" />
-          <p className="text-[10px] text-amber-300/60 leading-relaxed">Simulation model only � not real deployed model performance</p>
-        </div>
+                {isSimulation ? (
+          <div className="flex items-start gap-1.5 mb-3 bg-amber-500/5 border border-amber-500/12 rounded px-2 py-1.5">
+            <Info size={11} className="text-amber-400/60 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-amber-300/60 leading-relaxed">Simulation model only — not real deployed model performance</p>
+          </div>
+        ) : (
+          <div className="flex items-start gap-1.5 mb-3 bg-emerald-500/5 border border-emerald-500/15 rounded px-2 py-1.5">
+            <Zap size={11} className="text-emerald-400/70 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-emerald-300/70 leading-relaxed">Real model performance evaluated directly on uploaded model</p>
+          </div>
+        )}
         <div className="grid grid-cols-4 gap-2">
           <MetricCompact label="Acc" before={getVal(before, "accuracy")} after={getVal(after, "accuracy")} />
           <MetricCompact label="Pre" before={getVal(before, "precision")} after={getVal(after, "precision")} />

@@ -108,15 +108,16 @@ async def analyze(
     # ── 3. Optional model predictions ─────────────────────────────────────────
     model_used = False
     use_predictions = False
+    effective_model_id = body.model_id or session.get("model_id")
 
-    if body.model_id:
-        model_session = _find_model(sessions, body.model_id, body.session_id)
-        if model_session is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Model '{body.model_id}' not found. Please upload the model first.",
-            )
+    model_session = _find_model(sessions, effective_model_id, body.session_id)
+    if body.model_id and model_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{body.model_id}' not found. Please upload the model first.",
+        )
 
+    if model_session is not None and "model" in model_session:
         model = model_session["model"]
         feature_names: list[str] | None = getattr(model, "feature_names_in_", None)
 
@@ -188,6 +189,10 @@ async def analyze(
     session["target_col"] = body.target_col
     session["sensitive_attrs"] = body.sensitive_attrs
     session["df_with_predictions"] = df  # needed for mitigation
+    if model_used:
+        session["model"] = model
+        session["model_id"] = effective_model_id or model_session.get("model_id", body.model_id)
+        print(f"[Analyze] Persisted real model in session '{body.session_id}' (model_id={session.get('model_id')})")
     # Store top-level keys so report generator can access directly
     session["audit_score"]      = bias_results["audit_score"]
     session["overall_severity"] = bias_results["overall_severity"]
@@ -362,22 +367,34 @@ async def learning_stats() -> dict:
 
 def _find_model(
     sessions: dict,
-    model_id: str,
+    model_id: str | None,
     session_id: str,
 ) -> dict | None:
     """
-    Look for the model in the given session first, then in the top-level store
-    (model may have been uploaded independently with only a model_id key).
+    Look for the model in the given session first, then in the top-level store.
     """
-    # Check inside the session
     session = sessions.get(session_id, {})
-    if session.get("model_id") == model_id and "model" in session:
+    # Check inside session directly
+    if "model" in session and session["model"] is not None:
         return session
 
-    # Check standalone model entry
-    standalone = sessions.get(model_id)
-    if standalone and "model" in standalone:
-        return standalone
+    if model_id:
+        if session.get("model_id") == model_id and "model" in session:
+            return session
+        standalone = sessions.get(model_id)
+        if standalone and "model" in standalone:
+            return standalone
+
+    # Check session's stored model_id
+    stored_mid = session.get("model_id")
+    if stored_mid and stored_mid in sessions and "model" in sessions[stored_mid]:
+        return sessions[stored_mid]
+
+    # Global search for any model linked to this session
+    for k, v in sessions.items():
+        if isinstance(v, dict) and "model" in v and v["model"] is not None:
+            if v.get("session_id") == session_id:
+                return v
 
     return None
 

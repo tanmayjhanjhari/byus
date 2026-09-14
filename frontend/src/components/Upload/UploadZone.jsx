@@ -170,7 +170,8 @@ function ModelDropzone() {
       const form = new FormData();
       form.append("file", file);
       if (sessionId) form.append("session_id", sessionId);
-      const { data } = await client.post("/api/upload-model", form, {
+      const url = sessionId ? `/api/upload-model?session_id=${encodeURIComponent(sessionId)}` : "/api/upload-model";
+      const { data } = await client.post(url, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setModel(data.model_id);

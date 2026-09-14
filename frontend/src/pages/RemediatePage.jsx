@@ -41,6 +41,7 @@ export default function RemediatePage() {
         session_id: sessionId,
         target_col: targetCol,
         sensitive_attr: attr,
+        model_id: store.modelId || undefined,
       });
       if (!cancelled) {
         // We store it per attribute in a realistic app, but our backend

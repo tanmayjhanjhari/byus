@@ -14,7 +14,7 @@ from typing import Any
 import joblib
 import pandas as pd
 import os
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, status
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, status
 from services.preprocessor import DataPreprocessor
 
 router = APIRouter(tags=["Upload"])
@@ -265,7 +265,7 @@ async def load_sample_dataset(request: Request, dataset_id: str):
 async def upload_model(
     request: Request,
     file: UploadFile = File(...),
-    session_id: str | None = None,
+    session_id: str | None = Form(None),
 ) -> dict[str, Any]:
     """
     Accept a .pkl or .joblib model file.
@@ -273,6 +273,15 @@ async def upload_model(
     The model must be a scikit-learn-compatible estimator with a ``predict``
     method.  Optionally associates the model with an existing ``session_id``.
     """
+    # Extract session_id from query params or form data if not populated directly
+    if not session_id:
+        session_id = request.query_params.get("session_id")
+    if not session_id:
+        try:
+            form_data = await request.form()
+            session_id = form_data.get("session_id")
+        except Exception:
+            pass
     # ── Extension check ───────────────────────────────────────────────────────
     filename: str = file.filename or ""
     if not any(filename.endswith(ext) for ext in MODEL_EXTENSIONS):
@@ -294,6 +303,9 @@ async def upload_model(
 
     try:
         model = joblib.load(io.BytesIO(raw))
+        # Cross-version sklearn unpickling compatibility bridge
+        if not hasattr(model, "multi_class") and "LogisticRegression" in type(model).__name__:
+            setattr(model, "multi_class", "auto")
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -328,18 +340,23 @@ async def upload_model(
     # ── Generate IDs and persist ──────────────────────────────────────────────
     model_id = str(uuid.uuid4())
 
-    # Store model in the session if session_id was provided; else top-level
     sessions: dict = request.app.state.sessions
+
+    # Always store a standalone entry keyed by model_id for direct lookups
+    sessions[model_id] = {
+        "model": model,
+        "model_id": model_id,
+        "filename": filename,
+        "session_id": session_id,
+    }
+
+    # If session_id was provided and exists, attach the model directly to the session
     if session_id and session_id in sessions:
         sessions[session_id]["model"] = model
         sessions[session_id]["model_id"] = model_id
+        print(f"[UploadModel] Linked model '{model_id}' ({model_type}) to session '{session_id}'")
     else:
-        # Store as a standalone entry keyed by model_id
-        sessions[model_id] = {
-            "model": model,
-            "model_id": model_id,
-            "filename": filename,
-        }
+        print(f"[UploadModel] Stored model '{model_id}' ({model_type}) standalone (session_id={session_id})")
 
     return {
         "model_id": model_id,

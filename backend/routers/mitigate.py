@@ -29,6 +29,7 @@ class MitigateRequest(BaseModel):
     session_id: str
     target_col: str
     sensitive_attr: str
+    model_id: str | None = None
 
 
 @router.post("/mitigate", status_code=status.HTTP_200_OK)
@@ -96,6 +97,43 @@ async def mitigate(
     print(f"[Mitigate] Analysis baseline for {body.sensitive_attr!r}: "
           f"SPD={baseline_spd}, DI={baseline_di}")
 
+    # ── Real model + predictions integration ─────────────────────────────────
+    df_with_pred: pd.DataFrame | None = session.get("df_with_predictions")
+
+    # Multi-stage model resolution
+    real_model = session.get("model")
+
+    # Check model_id passed in request body
+    if real_model is None and body.model_id:
+        if body.model_id in sessions and "model" in sessions[body.model_id]:
+            real_model = sessions[body.model_id]["model"]
+            session["model"] = real_model
+            session["model_id"] = body.model_id
+            print(f"[Mitigate] Resolved model '{body.model_id}' from request body")
+
+    # Check model_id stored in session
+    if real_model is None:
+        model_id_in_session = session.get("model_id")
+        if model_id_in_session and model_id_in_session in sessions and "model" in sessions[model_id_in_session]:
+            real_model = sessions[model_id_in_session]["model"]
+            session["model"] = real_model
+            print(f"[Mitigate] Resolved model '{model_id_in_session}' from session['model_id']")
+
+    # Check if a model entry in sessions belongs to this session
+    if real_model is None:
+        for k, v in sessions.items():
+            if isinstance(v, dict) and v.get("session_id") == body.session_id and "model" in v and v["model"] is not None:
+                real_model = v["model"]
+                session["model"] = real_model
+                session["model_id"] = v.get("model_id", k)
+                print(f"[Mitigate] Resolved model '{k}' linked to session '{body.session_id}'")
+                break
+
+    print(f"[Mitigate] Real model available: {real_model is not None} "
+          f"(type: {getattr(type(real_model), '__name__', 'None')}, "
+          f"has predict_proba: {callable(getattr(real_model, 'predict_proba', None))})")
+    print(f"[Mitigate] df_with_predictions available: {df_with_pred is not None}")
+
     try:
         mitigation_results = mitigator.run_both(
             df=df,
@@ -105,6 +143,8 @@ async def mitigate(
             baseline_spd=baseline_spd,
             baseline_di=baseline_di,
             baseline_group_stats=baseline_gs,
+            model=real_model,
+            df_with_pred=df_with_pred,
         )
     except Exception as exc:
         raise HTTPException(

@@ -433,5 +433,33 @@
     "source": "Auto:diabetes 1.csv-age",
     "auto": true,
     "timestamp": "2026-09-14T04:32:40.124541"
+  },
+  {
+    "spd": 0.1517,
+    "di": 0.686,
+    "top_proxy_r": 0.5451,
+    "group_ratio": 0.1311,
+    "proxy_count": 3,
+    "rate_variance": 0.0759,
+    "scenario": 6,
+    "cause": "proxy",
+    "severity": "medium",
+    "source": "Auto:diabetes 1.csv-age",
+    "auto": true,
+    "timestamp": "2026-09-14T05:42:41.867305"
+  },
+  {
+    "spd": 0.1931,
+    "di": 0.7482,
+    "top_proxy_r": 0.0407,
+    "group_ratio": 0.9268,
+    "proxy_count": 0,
+    "rate_variance": 0.0966,
+    "scenario": 6,
+    "cause": "historical_skew",
+    "severity": "medium",
+    "source": "Auto:credit_risk_v2.csv-gender",
+    "auto": true,
+    "timestamp": "2026-09-14T20:45:09.033054"
   }
 ]
