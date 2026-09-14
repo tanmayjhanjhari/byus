@@ -1,9 +1,9 @@
 import { motion } from "framer-motion";
-import { ArrowDown, ArrowUp, Info, Trophy, Settings, BarChart2, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, Info, Trophy, Settings, BarChart2, Zap, AlertCircle, Play, Loader2 } from "lucide-react";
 
 const getVal = (obj, key) => obj?.[key] ?? obj?.[key.toUpperCase()] ?? obj?.[key.toLowerCase()];
 
-// null/undefined means genuinely unavailable � NOT the same as 0.000
+// null/undefined means genuinely unavailable — NOT the same as 0.000
 function DeltaRow({ label, before, after }) {
   const isUnavailable = before === null || before === undefined || after === null || after === undefined;
 
@@ -11,7 +11,9 @@ function DeltaRow({ label, before, after }) {
     return (
       <tr className="border-b border-white/[0.04] last:border-0">
         <td className="truncate px-2 py-1.5 min-w-0 font-medium text-textSecondary">{label}</td>
-        <td className="truncate px-2 py-1.5 min-w-0 text-textSecondary/40 text-right text-xs italic">N/A</td>
+        <td className="truncate px-2 py-1.5 min-w-0 text-textSecondary/40 text-right text-xs italic">
+          {before !== null && before !== undefined ? Number(before).toFixed(3) : "N/A"}
+        </td>
         <td className="truncate px-2 py-1.5 min-w-0 text-textSecondary/40 text-right text-xs italic">N/A</td>
         <td className="truncate px-2 py-1.5 min-w-0 text-textSecondary/40 text-right text-xs">—</td>
       </tr>
@@ -76,19 +78,28 @@ function MetricCompact({ label, before, after }) {
   );
 }
 
-export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
-  if (!data || !data.before || !data.after) return null;
+export default function TechniqueCard({ 
+  name, 
+  data, 
+  isWinner, 
+  winnerReason,
+  onRunSimulation,
+  isSimulating = false,
+}) {
+  if (!data) return null;
 
   const title = name === "reweigh" ? "Reweighing" : "Threshold Adjustment";
   const desc = name === "reweigh"
     ? "Adjusts training data weights to ensure demographic balance."
     : "Finds per-group decision thresholds to equalise outcome rates.";
 
-  const before = data.before;
+  const before = data.before || {};
   const after = data.after;
   const effects = data.effects || {};
   const isSimulation = data.is_simulation === true;
   const simulationNote = data.simulation_note;
+  const hasRealModel = data.has_real_model === true;
+  const isModelRequired = data.status === "model_required" || data.model_required === true;
 
   return (
     <motion.div
@@ -105,7 +116,12 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
             <h3 className={`text-lg font-bold ${isWinner ? "text-accent" : "text-textPrimary"}`}>
               {title}
             </h3>
-            {isSimulation && (
+            {isModelRequired && (
+              <span className="px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 border border-amber-500/25 text-amber-300 rounded">
+                Model Required
+              </span>
+            )}
+            {isSimulation && !isModelRequired && (
               <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded">
                 Simulation
               </span>
@@ -125,14 +141,49 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
         </div>
       )}
 
-      {/* Simulation disclosure */}
-      {isSimulation && simulationNote && (
-        <div className="mb-4 flex items-start gap-2 bg-amber-500/6 border border-amber-500/20 rounded-lg px-3 py-2">
-          <Info size={13} className="text-amber-400/70 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-300/70 leading-relaxed">{simulationNote}</p>
+      {/* Mode 1: Model Required Notice & Optional Simulation */}
+      {isModelRequired && (
+        <div className="space-y-4 mb-6">
+          <div className="bg-amber-500/10 border border-amber-500/25 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <AlertCircle size={16} className="text-amber-400 flex-shrink-0" />
+              <span className="font-semibold text-sm text-amber-300">Model Required</span>
+            </div>
+            <p className="text-xs text-amber-200/80 leading-relaxed">
+              Upload a compatible trained model to perform real threshold adjustment.
+            </p>
+          </div>
+
+          <div className="bg-surface/50 border border-white/10 rounded-xl p-4">
+            <p className="text-xs text-textSecondary leading-relaxed mb-3">
+              No trained model uploaded. You can optionally run a simulation to demonstrate how threshold adjustment works. Simulation results are illustrative and are NOT results from a real model.
+            </p>
+            <button
+              type="button"
+              onClick={onRunSimulation}
+              disabled={isSimulating}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold bg-accent/15 border border-accent/30 text-accent hover:bg-accent/25 transition-colors rounded-lg disabled:opacity-50 cursor-pointer"
+            >
+              {isSimulating ? <Loader2 size={14} className="animate-spin text-accent" /> : <Play size={14} className="text-accent" />}
+              <span>{isSimulating ? "Running Simulation…" : "Run Simulation"}</span>
+            </button>
+            <p className="text-[10px] text-textSecondary/60 mt-2">
+              Simulation is optional and illustrative only.
+            </p>
+          </div>
         </div>
       )}
-      {!isSimulation && simulationNote && (
+
+      {/* Simulation disclosure */}
+      {isSimulation && !isModelRequired && (
+        <div className="mb-4 flex items-start gap-2 bg-amber-500/6 border border-amber-500/20 rounded-lg px-3 py-2">
+          <Info size={13} className="text-amber-400/70 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-300/70 leading-relaxed">
+            Simulation only — not real model performance. An internal simulation model was used to demonstrate threshold adjustment.
+          </p>
+        </div>
+      )}
+      {!isSimulation && !isModelRequired && simulationNote && (
         <div className="mb-4 flex items-start gap-2 bg-blue-500/6 border border-blue-500/20 rounded-lg px-3 py-2">
           <Info size={13} className="text-blue-400/60 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-blue-300/60 leading-relaxed">{simulationNote}</p>
@@ -171,7 +222,7 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
                   key={m}
                   label={m}
                   before={getVal(before, m)}
-                  after={getVal(after, m)}
+                  after={isModelRequired ? null : getVal(after, m)}
                 />
               ))}
             </tbody>
@@ -184,27 +235,48 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
         <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-2 border-b border-white/[0.06] pb-2">
           Performance Trade-off
         </h4>
-                {isSimulation ? (
+        {isSimulation ? (
           <div className="flex items-start gap-1.5 mb-3 bg-amber-500/5 border border-amber-500/12 rounded px-2 py-1.5">
             <Info size={11} className="text-amber-400/60 flex-shrink-0 mt-0.5" />
-            <p className="text-[10px] text-amber-300/60 leading-relaxed">Simulation model only — not real deployed model performance</p>
+            <p className="text-[10px] text-amber-300/60 leading-relaxed">Simulation only — not real model performance</p>
           </div>
-        ) : (
+        ) : hasRealModel ? (
           <div className="flex items-start gap-1.5 mb-3 bg-emerald-500/5 border border-emerald-500/15 rounded px-2 py-1.5">
             <Zap size={11} className="text-emerald-400/70 flex-shrink-0 mt-0.5" />
             <p className="text-[10px] text-emerald-300/70 leading-relaxed">Real model performance evaluated directly on uploaded model</p>
           </div>
+        ) : (
+          <div className="flex items-start gap-1.5 mb-3 bg-white/[0.03] border border-white/10 rounded px-2 py-1.5">
+            <Info size={11} className="text-textSecondary/80 flex-shrink-0 mt-0.5" />
+            <p className="text-[10px] text-textSecondary/90 leading-relaxed">Model-level performance unavailable — no model uploaded</p>
+          </div>
         )}
         <div className="grid grid-cols-4 gap-2">
-          <MetricCompact label="Acc" before={getVal(before, "accuracy")} after={getVal(after, "accuracy")} />
-          <MetricCompact label="Pre" before={getVal(before, "precision")} after={getVal(after, "precision")} />
-          <MetricCompact label="Rec" before={getVal(before, "recall")} after={getVal(after, "recall")} />
-          <MetricCompact label="F1"  before={getVal(before, "f1")} after={getVal(after, "f1")} />
+          <MetricCompact 
+            label="Acc" 
+            before={isModelRequired ? null : getVal(before, "accuracy")} 
+            after={isModelRequired ? null : getVal(after, "accuracy")} 
+          />
+          <MetricCompact 
+            label="Pre" 
+            before={isModelRequired ? null : getVal(before, "precision")} 
+            after={isModelRequired ? null : getVal(after, "precision")} 
+          />
+          <MetricCompact 
+            label="Rec" 
+            before={isModelRequired ? null : getVal(before, "recall")} 
+            after={isModelRequired ? null : getVal(after, "recall")} 
+          />
+          <MetricCompact 
+            label="F1"  
+            before={isModelRequired ? null : getVal(before, "f1")} 
+            after={isModelRequired ? null : getVal(after, "f1")} 
+          />
         </div>
       </div>
 
       {/* Non-winner diagnostic */}
-      {!isWinner && (
+      {!isWinner && !isModelRequired && (
         <div className="mt-5 flex items-start gap-2 text-xs text-textSecondary bg-surface/50 p-3 rounded-lg">
           <Info size={14} className="flex-shrink-0 mt-0.5 opacity-70" />
           <p>
@@ -218,7 +290,7 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
       )}
 
       {/* Diagnostic box when bias reduction is very low */}
-      {effects.diagnostic && (
+      {!isModelRequired && effects.diagnostic && (
         <div className="mt-4 flex items-start gap-2 text-xs bg-amber-500/10 border border-amber-500/25 p-3 rounded-lg">
           <Info size={14} className="flex-shrink-0 mt-0.5 text-amber-400" />
           <p className="text-amber-300/90 leading-relaxed">{effects.diagnostic}</p>
@@ -226,7 +298,7 @@ export default function TechniqueCard({ name, data, isWinner, winnerReason }) {
       )}
 
       {/* Understanding this result */}
-      {data.explanation && (
+      {!isModelRequired && data.explanation && (
         <div className="mt-6 border-t border-white/[0.06] pt-4">
           <h4 className="text-xs font-semibold text-textSecondary uppercase tracking-widest mb-3">
             Understanding this result

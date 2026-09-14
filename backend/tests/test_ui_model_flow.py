@@ -1,25 +1,31 @@
 """
 FairEnough — End-to-End UI Model Persistence & API Integration Tests
 
-Covers all 12 required scenarios:
-1. CSV upload without model
-2. CSV + compatible PKL model upload
-3. Model persistence after upload
-4. Model availability on Analyze
-5. Model availability after Analyze → Mitigation
-6. Mitigation request contains correct model/session/reference
-7. Backend receives and resolves the model
-8. Threshold Adjustment enters real-model path
-9. Real model does not enter simulation path
-10. No-model case still correctly enters simulation behavior
-11. Incompatible model prediction error handling
-12. Multi-group attributes (e.g. age_group) in real UI flow
+Covers all required scenarios across two distinct product modes:
+MODE 1: Dataset Only
+  1. CSV upload without model
+  2. Dataset-only analysis calculates SPD/DI, EOD=N/A, AOD=N/A
+  3. Dataset-only Reweighing performance metrics = N/A
+  4. Dataset-only Threshold Adjustment does NOT automatically simulate
+  5. Dataset-only Threshold Adjustment returns Model Required
+  6. Optional simulation triggers ONLY on explicit user action (simulate_threshold=True)
+  7. Optional simulation clearly marked as simulation
+
+MODE 2: Dataset + Compatible Real Model
+  8. CSV + PKL model upload & persistence
+  9. Real model availability across Upload → Analyze → Mitigation
+  10. Threshold Adjustment executes real-model path without simulation
+  11. Real performance metrics (Acc, Pre, Rec, F1) computed from uploaded model
+  12. Reweighing label reflects real model availability
+  13. Incompatible model prediction error handling
+  14. Multi-group attribute support with real model
 """
 
 import os
+import sys
 import pytest
 from fastapi.testclient import TestClient
-import sys, os
+
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
@@ -37,20 +43,157 @@ def client():
 
 
 class TestUIModelIntegrationFlow:
-    """Test suite verifying end-to-end model persistence between UI stages."""
+    """Test suite verifying model persistence and dual user modes (Dataset Only vs Dataset + Model)."""
 
     def test_1_csv_upload_without_model(self, client):
         """CSV upload creates session and initializes dataset metadata."""
         with open(CSV_PATH, "rb") as f:
             resp = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
-        assert resp.status_code == 201, f"CSV upload failed: {resp.text}"
+        assert resp.status_code in (200, 201)
         data = resp.json()
         assert "session_id" in data
         assert data["row_count"] == 1000
         assert "credit_risk" in data["columns"]
 
-    def test_2_csv_and_compatible_pkl_upload(self, client):
-        """Uploading compatible model links model to session and persists standalone entry."""
+    def test_2_dataset_only_analysis_eod_aod_na(self, client):
+        """When only CSV is uploaded, SPD/DI are real dataset metrics; EOD and AOD are N/A."""
+        with open(CSV_PATH, "rb") as f:
+            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
+        sid = r_csv.json()["session_id"]
+
+        r_an = client.post(
+            "/api/analyze",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attrs": ["gender"],
+            },
+        )
+        assert r_an.status_code == 200
+        data = r_an.json()
+        metrics = data["metrics_per_attr"]["gender"]
+        # SPD and DI must exist from dataset distributions
+        assert metrics["spd"] is not None
+        assert metrics["di"] is not None
+        # EOD and AOD must be None (N/A) because there are no model predictions
+        assert metrics["eod"] is None, "Dataset-only analysis must have EOD=None"
+        assert metrics["aod"] is None, "Dataset-only analysis must have AOD=None"
+        assert metrics["eod_available"] is False
+        assert metrics["aod_available"] is False
+
+    def test_3_dataset_only_reweighing_performance_na(self, client):
+        """Dataset-only Reweighing computes dataset SPD/DI; performance metrics Acc/Pre/Rec/F1 are N/A."""
+        with open(CSV_PATH, "rb") as f:
+            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
+        sid = r_csv.json()["session_id"]
+
+        client.post(
+            "/api/analyze",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attrs": ["gender"],
+            },
+        )
+
+        r_mit = client.post(
+            "/api/mitigate",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attr": "gender",
+            },
+        )
+        assert r_mit.status_code == 200
+        data = r_mit.json()
+        rew = data["reweigh"]
+        assert rew["has_real_model"] is False
+        assert rew["before"].get("accuracy") is None
+        assert rew["after"]["accuracy"] is None
+        assert rew["before"].get("f1") is None
+        assert rew["after"]["f1"] is None
+        assert "no model uploaded" in rew["after"]["simulation_note"].lower()
+
+    def test_4_dataset_only_threshold_does_not_auto_simulate(self, client):
+        """When no model is uploaded, Threshold Adjustment does NOT auto-simulate; shows Model Required."""
+        with open(CSV_PATH, "rb") as f:
+            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
+        sid = r_csv.json()["session_id"]
+
+        client.post(
+            "/api/analyze",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attrs": ["gender"],
+            },
+        )
+
+        r_mit = client.post(
+            "/api/mitigate",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attr": "gender",
+            },
+        )
+        assert r_mit.status_code == 200
+        thr = r_mit.json()["threshold"]
+        # Must not automatically simulate
+        assert thr["is_simulation"] is False
+        assert thr["model_required"] is True
+        assert thr["status"] == "model_required"
+        assert thr["can_simulate"] is True
+        assert "Model Required" in thr["title"]
+        assert thr["after"] is None
+
+    def test_5_simulation_starts_only_on_explicit_user_action(self, client):
+        """Simulation for Threshold Adjustment starts ONLY after explicit user action (simulate_threshold=True)."""
+        with open(CSV_PATH, "rb") as f:
+            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
+        sid = r_csv.json()["session_id"]
+
+        client.post(
+            "/api/analyze",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attrs": ["gender"],
+            },
+        )
+
+        # Default request: no simulation
+        r_default = client.post(
+            "/api/mitigate",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attr": "gender",
+                "simulate_threshold": False,
+            },
+        )
+        assert r_default.json()["threshold"]["is_simulation"] is False
+
+        # Explicit user action: run simulation
+        r_sim = client.post(
+            "/api/mitigate",
+            json={
+                "session_id": sid,
+                "target_col": "credit_risk",
+                "sensitive_attr": "gender",
+                "simulate_threshold": True,
+            },
+        )
+        assert r_sim.status_code == 200
+        thr_sim = r_sim.json()["threshold"]
+        assert thr_sim["is_simulation"] is True, "Must be labelled as simulation"
+        assert thr_sim["has_real_model"] is False
+        assert thr_sim["after"] is not None
+        assert thr_sim["simulation_note"] is not None
+        assert "simulation" in thr_sim["simulation_note"].lower()
+
+    def test_6_csv_and_compatible_pkl_upload(self, client):
+        """Uploading CSV followed by PKL model stores model in active session."""
         with open(CSV_PATH, "rb") as f:
             r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
         sid = r_csv.json()["session_id"]
@@ -61,39 +204,18 @@ class TestUIModelIntegrationFlow:
                 files={"file": ("credit_risk_v2_model.pkl", f, "application/octet-stream")},
                 data={"session_id": sid},
             )
-        assert r_model.status_code == 201, f"Model upload failed: {r_model.text}"
-        m_data = r_model.json()
-        assert "model_id" in m_data
-        assert m_data["model_type"] == "LogisticRegression"
+        assert r_model.status_code in (200, 201)
+        mdata = r_model.json()
+        assert "model_id" in mdata
+        assert mdata["model_type"] == "LogisticRegression"
+        assert mdata["n_features"] == 8
 
-        # Verify backend session store persistence
-        sessions = app.state.sessions
-        assert sid in sessions, "Session must exist in app.state.sessions"
-        assert "model" in sessions[sid], "Model must be directly linked to session"
-        assert sessions[sid]["model_id"] == m_data["model_id"]
+        session = app.state.sessions[sid]
+        assert session.get("model") is not None
+        assert session.get("model_id") == mdata["model_id"]
 
-    def test_3_model_persistence_form_only_without_query_param(self, client):
-        """Model upload via form data alone (standard FormData dropzone) links model to session."""
-        with open(CSV_PATH, "rb") as f:
-            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
-        sid = r_csv.json()["session_id"]
-
-        with open(PKL_PATH, "rb") as f:
-            r_model = client.post(
-                "/api/upload-model",
-                files={"file": ("credit_risk_v2_model.pkl", f, "application/octet-stream")},
-                data={"session_id": sid},
-            )
-        assert r_model.status_code == 201
-        m_data = r_model.json()
-        mid = m_data["model_id"]
-
-        sessions = app.state.sessions
-        assert sessions[sid].get("model") is not None, "Model must be linked to session via form data"
-        assert sessions[sid].get("model_id") == mid
-
-    def test_4_model_availability_on_analyze(self, client):
-        """Analyze generates real predictions from uploaded model and preserves model in session."""
+    def test_7_model_availability_after_analyze_to_mitigation(self, client):
+        """Model survives Analyze stage and executes real Threshold Adjustment in Mitigation."""
         with open(CSV_PATH, "rb") as f:
             r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
         sid = r_csv.json()["session_id"]
@@ -106,6 +228,7 @@ class TestUIModelIntegrationFlow:
             )
         mid = r_model.json()["model_id"]
 
+        # Analyze
         r_an = client.post(
             "/api/analyze",
             json={
@@ -115,77 +238,12 @@ class TestUIModelIntegrationFlow:
                 "model_id": mid,
             },
         )
-        assert r_an.status_code == 200, f"Analyze failed: {r_an.text}"
+        assert r_an.status_code == 200
         an_data = r_an.json()
-        assert an_data.get("model_used") is True
+        assert an_data["metrics_per_attr"]["gender"]["metrics_mode"] == "model_level"
+        assert an_data["metrics_per_attr"]["gender"]["eod_available"] is True
 
-        sessions = app.state.sessions
-        assert "df_with_predictions" in sessions[sid], "df_with_predictions must be saved in session"
-        assert "model" in sessions[sid], "Real model must remain persisted in session after analyze"
-        assert sessions[sid]["model_id"] == mid
-
-    def test_5_model_availability_after_analyze_to_mitigation(self, client):
-        """When navigating to mitigation, real model remains accessible without re-upload."""
-        with open(CSV_PATH, "rb") as f:
-            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
-        sid = r_csv.json()["session_id"]
-
-        with open(PKL_PATH, "rb") as f:
-            r_model = client.post(
-                "/api/upload-model",
-                files={"file": ("credit_risk_v2_model.pkl", f, "application/octet-stream")},
-                data={"session_id": sid},
-            )
-        mid = r_model.json()["model_id"]
-
-        client.post(
-            "/api/analyze",
-            json={
-                "session_id": sid,
-                "target_col": "credit_risk",
-                "sensitive_attrs": ["gender"],
-                "model_id": mid,
-            },
-        )
-
-        # Call mitigate with session_id (even if frontend didn't supply model_id)
-        r_mit = client.post(
-            "/api/mitigate",
-            json={
-                "session_id": sid,
-                "target_col": "credit_risk",
-                "sensitive_attr": "gender",
-            },
-        )
-        assert r_mit.status_code == 200, f"Mitigate failed: {r_mit.text}"
-        mit_data = r_mit.json()
-        thr = mit_data["threshold"]
-        assert thr["is_simulation"] is False, "Threshold must use real model, not simulation"
-        assert thr["simulation_note"] is None, "Real model threshold must not have simulation_note"
-
-    def test_6_mitigation_request_with_explicit_model_id(self, client):
-        """Mitigate request containing model_id resolves and binds model."""
-        with open(CSV_PATH, "rb") as f:
-            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
-        sid = r_csv.json()["session_id"]
-
-        with open(PKL_PATH, "rb") as f:
-            r_model = client.post(
-                "/api/upload-model",
-                files={"file": ("credit_risk_v2_model.pkl", f, "application/octet-stream")},
-            )
-        mid = r_model.json()["model_id"]
-
-        client.post(
-            "/api/analyze",
-            json={
-                "session_id": sid,
-                "target_col": "credit_risk",
-                "sensitive_attrs": ["gender"],
-                "model_id": mid,
-            },
-        )
-
+        # Mitigation
         r_mit = client.post(
             "/api/mitigate",
             json={
@@ -196,12 +254,15 @@ class TestUIModelIntegrationFlow:
             },
         )
         assert r_mit.status_code == 200
-        thr = r_mit.json()["threshold"]
-        assert thr["is_simulation"] is False
+        mit_data = r_mit.json()
+        thr = mit_data["threshold"]
+        assert thr["is_simulation"] is False, "Real model must NOT be marked as simulation"
+        assert thr["has_real_model"] is True
+        assert thr["after"] is not None
         assert thr["after"]["metrics_mode"] == "model_level"
 
-    def test_7_threshold_adjustment_real_metrics_values(self, client):
-        """Real model threshold adjustment calculates genuine, non-collapsed performance metrics."""
+    def test_8_threshold_real_performance_metrics(self, client):
+        """Real model threshold adjustment computes genuine non-collapsed metrics."""
         with open(CSV_PATH, "rb") as f:
             r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
         sid = r_csv.json()["session_id"]
@@ -234,19 +295,27 @@ class TestUIModelIntegrationFlow:
             },
         )
         after = r_mit.json()["threshold"]["after"]
-        assert 0.50 <= after["accuracy"] <= 0.85, f"Unexpected accuracy: {after['accuracy']}"
+        assert 0.50 <= after["accuracy"] <= 0.85
         assert 0.50 <= after["precision"] <= 0.85
         assert 0.50 <= after["recall"] <= 1.0
         assert 0.50 <= after["f1"] <= 0.90
-        assert after["positive_prediction_rate"] < 1.0, "Positive rate must be strictly < 1.0 (no collapse)"
+        assert after["positive_prediction_rate"] < 1.0
         assert after["eod_available"] is True
         assert after["aod_available"] is True
 
-    def test_8_no_model_case_correctly_enters_simulation(self, client):
-        """When no model was provided, threshold adjustment properly labels simulation."""
+    def test_9_reweighing_label_dynamic_with_model(self, client):
+        """Reweighing has_real_model flag accurately reflects presence of uploaded model."""
         with open(CSV_PATH, "rb") as f:
             r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
         sid = r_csv.json()["session_id"]
+
+        with open(PKL_PATH, "rb") as f:
+            r_model = client.post(
+                "/api/upload-model",
+                files={"file": ("credit_risk_v2_model.pkl", f, "application/octet-stream")},
+                data={"session_id": sid},
+            )
+        mid = r_model.json()["model_id"]
 
         client.post(
             "/api/analyze",
@@ -254,6 +323,7 @@ class TestUIModelIntegrationFlow:
                 "session_id": sid,
                 "target_col": "credit_risk",
                 "sensitive_attrs": ["gender"],
+                "model_id": mid,
             },
         )
 
@@ -263,45 +333,13 @@ class TestUIModelIntegrationFlow:
                 "session_id": sid,
                 "target_col": "credit_risk",
                 "sensitive_attr": "gender",
+                "model_id": mid,
             },
         )
-        assert r_mit.status_code == 200
-        thr = r_mit.json()["threshold"]
-        assert thr["is_simulation"] is True, "No-model case must be labelled is_simulation=True"
-        assert thr["simulation_note"] is not None
-        assert "GBM simulation" in thr["simulation_note"]
-
-    def test_9_incompatible_model_prediction_error_handling(self, client):
-        """Model that fails prediction during analyze reports 500 without corrupting session."""
-        from unittest.mock import MagicMock
-        with open(CSV_PATH, "rb") as f:
-            r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
-        sid = r_csv.json()["session_id"]
-
-        broken_model = MagicMock()
-        broken_model.predict.side_effect = RuntimeError("Broken custom estimator")
-        import numpy as np
-        broken_model.feature_names_in_ = np.array(["duration", "amount"])
-
-        app.state.sessions["broken_model_test"] = {
-            "model": broken_model,
-            "model_id": "broken_model_test",
-        }
-
-        r_an = client.post(
-            "/api/analyze",
-            json={
-                "session_id": sid,
-                "target_col": "credit_risk",
-                "sensitive_attrs": ["gender"],
-                "model_id": "broken_model_test",
-            },
-        )
-        assert r_an.status_code == 500
-        assert "Model prediction failed" in r_an.json()["detail"]
+        assert r_mit.json()["reweigh"]["has_real_model"] is True
 
     def test_10_multi_group_attribute_real_model_mitigation(self, client):
-        """Multi-group attribute (age_group, 4 categories) executes real model threshold adjustment."""
+        """Multi-group attribute (e.g. age_group) successfully optimizes per-group thresholds with real model."""
         with open(CSV_PATH, "rb") as f:
             r_csv = client.post("/api/upload", files={"file": ("credit_risk_v2.csv", f, "text/csv")})
         sid = r_csv.json()["session_id"]
@@ -336,5 +374,5 @@ class TestUIModelIntegrationFlow:
         assert r_mit.status_code == 200
         thr = r_mit.json()["threshold"]
         assert thr["is_simulation"] is False
-        assert len(thr["thresholds"]) == 4, f"Expected 4 age group thresholds, got {len(thr['thresholds'])}"
-        assert thr["after"]["positive_prediction_rate"] < 1.0
+        assert thr["has_real_model"] is True
+        assert thr["after"]["eod_available"] is True

@@ -377,6 +377,7 @@ class BiasMitigator:
         # Real model integration (optional)
         model: Any = None,
         df_with_pred: pd.DataFrame | None = None,
+        allow_simulation: bool = True,
     ) -> dict[str, Any]:
         """
         Run both mitigation strategies and return a unified comparison.
@@ -412,7 +413,22 @@ class BiasMitigator:
             baseline_group_stats=baseline_group_stats,
             model=model,
             df_with_pred=df_with_pred,
+            allow_simulation=allow_simulation,
         )
+
+        if thr.get("model_required") or not thr.get("after"):
+            winner = "reweigh"
+            winner_reason = (
+                "Reweighing was applied to reduce dataset-level disparity. "
+                "Threshold Adjustment requires a trained model or optional simulation."
+            )
+            return {
+                "reweigh": rew,
+                "threshold": thr,
+                "winner": winner,
+                "winner_reason": winner_reason,
+                "predicted_cause_used": predicted_cause,
+            }
 
         # ── Winner selection (dataset-level SPD only where model not real) ────
         spd_b = abs(rew["before"]["SPD"] or 0)
@@ -584,7 +600,7 @@ class BiasMitigator:
         before_aod: float | None = None
         real_model_before = False
 
-        if df_with_pred is not None and "__predictions__" in df_with_pred.columns:
+        if model is not None and df_with_pred is not None and "__predictions__" in df_with_pred.columns:
             try:
                 df_pred_work = df_with_pred.dropna(
                     subset=[target_col, sensitive_attr, "__predictions__"]
@@ -699,6 +715,12 @@ class BiasMitigator:
         # ── Effects ──────────────────────────────────────────────────────────
         effects = self._compute_effects(before, after)
 
+        has_real_model = bool((model is not None) or real_model_before)
+        if not has_real_model:
+            rew_perf_note = "Model-level performance unavailable — no model uploaded"
+            before["simulation_note"] = rew_perf_note
+            after["simulation_note"] = rew_perf_note
+
         return {
             "before": before,
             "after": after,
@@ -710,6 +732,7 @@ class BiasMitigator:
                 "mean": round(float(weights.mean()), 3),
             },
             "is_simulation": False,  # Reweighing SPD/DI = real dataset metrics
+            "has_real_model": has_real_model,
             "simulation_note": (
                 "Dataset-level SPD and DI were computed before and after "
                 "applying reweighing weights to the outcome distributions. "
@@ -740,6 +763,7 @@ class BiasMitigator:
         min_pos_rate: float = 0.05,
         max_pos_rate: float = 0.95,
         min_samples_per_class: int = 2,
+        allow_simulation: bool = True,
     ) -> dict[str, Any]:
         """
         Threshold adjustment mitigation.
@@ -780,7 +804,7 @@ class BiasMitigator:
         before_aod: float | None = None
         real_model_before = False
 
-        if df_with_pred is not None and "__predictions__" in df_with_pred.columns:
+        if model is not None and df_with_pred is not None and "__predictions__" in df_with_pred.columns:
             try:
                 df_pred_work = df_with_pred.dropna(
                     subset=[target_col, sensitive_attr, "__predictions__"]
@@ -819,7 +843,7 @@ class BiasMitigator:
         )
 
         if has_predict_proba:
-            return self._threshold_real_model(
+            res = self._threshold_real_model(
                 df=df,
                 df_work=df_work,
                 target_col=target_col,
@@ -833,14 +857,41 @@ class BiasMitigator:
                 max_pos_rate=max_pos_rate,
                 min_samples_per_class=min_samples_per_class,
             )
+            res["has_real_model"] = True
+            return res
         else:
+            if not allow_simulation:
+                print(f"[Mitigator/Threshold] No model provided and simulation not requested -> Model Required")
+                return {
+                    "technique": "Threshold Adjustment",
+                    "status": "model_required",
+                    "model_required": True,
+                    "available": False,
+                    "is_simulation": False,
+                    "can_simulate": True,
+                    "has_real_model": False,
+                    "title": "Model Required",
+                    "message": "Upload a compatible trained model to perform real threshold adjustment.",
+                    "simulation_note": (
+                        "No trained model uploaded. You can optionally run a simulation to "
+                        "demonstrate how threshold adjustment works. Simulation results are "
+                        "illustrative and are NOT results from a real model."
+                    ),
+                    "before": before,
+                    "after": None,
+                    "effects": {
+                        "bias_reduction_pct": 0.0,
+                        "accuracy_retained_pct": 100.0,
+                    },
+                }
+
             reason = (
                 "model lacks predict_proba()"
                 if model is not None
                 else "no model provided"
             )
             print(f"[Mitigator/Threshold] Using GBM simulation ({reason})")
-            return self._threshold_simulation(
+            res = self._threshold_simulation(
                 df_work=df_work,
                 target_col=target_col,
                 sensitive_attr=sensitive_attr,
@@ -852,6 +903,8 @@ class BiasMitigator:
                 max_pos_rate=max_pos_rate,
                 min_samples_per_class=min_samples_per_class,
             )
+            res["has_real_model"] = False
+            return res
 
     def _threshold_real_model(
         self,

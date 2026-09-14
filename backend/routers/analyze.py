@@ -166,8 +166,9 @@ async def analyze(
                 detail=f"Model prediction failed: {exc}",
             )
     else:
-        # Without a model, treat the target column as the "prediction"
-        df["__predictions__"] = df[body.target_col]
+        # Without a model, there are no predictions
+        use_predictions = False
+        model_used = False
 
     # ── 4. Run bias engine ────────────────────────────────────────────────────
     try:
@@ -188,7 +189,7 @@ async def analyze(
     session["bias_results"] = bias_results
     session["target_col"] = body.target_col
     session["sensitive_attrs"] = body.sensitive_attrs
-    session["df_with_predictions"] = df  # needed for mitigation
+    session["df_with_predictions"] = df if model_used else None  # needed for mitigation only when model used
     if model_used:
         session["model"] = model
         session["model_id"] = effective_model_id or model_session.get("model_id", body.model_id)

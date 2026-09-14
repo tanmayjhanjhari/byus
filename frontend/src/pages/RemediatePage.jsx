@@ -19,7 +19,9 @@ export default function RemediatePage() {
   const { sessionId, targetCol, sensitiveAttrs, mitigation, setMitigation, setStep } = store;
 
   const [loading, setLoading] = useState(false);
+  const [simulating, setSimulating] = useState(false);
   const [activeAttr, setActiveAttr] = useState(sensitiveAttrs[0] || "");
+  const [simulatedAttrs, setSimulatedAttrs] = useState({});
 
   useEffect(() => {
     if (!sessionId || !targetCol || sensitiveAttrs.length === 0) {
@@ -33,20 +35,19 @@ export default function RemediatePage() {
     }
   }, [sessionId, targetCol, sensitiveAttrs, navigate, mitigation]);
 
-  const runMitigation = async (attr) => {
+  const runMitigation = async (attr, forceSimulate = false) => {
     let cancelled = false;
     setLoading(true);
     try {
+      const shouldSimulate = forceSimulate || Boolean(simulatedAttrs[attr]);
       const { data } = await client.post("/api/mitigate", {
         session_id: sessionId,
         target_col: targetCol,
         sensitive_attr: attr,
         model_id: store.modelId || undefined,
+        simulate_threshold: shouldSimulate,
       });
       if (!cancelled) {
-        // We store it per attribute in a realistic app, but our backend
-        // returns the result for the requested attribute.
-        // For simplicity, we just store the latest run in the global state.
         setMitigation(data);
         setStep(3);
       }
@@ -58,9 +59,21 @@ export default function RemediatePage() {
     return () => { cancelled = true; };
   };
 
+  const handleRunSimulation = async () => {
+    setSimulating(true);
+    setSimulatedAttrs(prev => ({ ...prev, [activeAttr]: true }));
+    try {
+      await runMitigation(activeAttr, true);
+      toast.success("Simulation generated for Threshold Adjustment");
+    } catch {
+      /* interceptor */
+    } finally {
+      setSimulating(false);
+    }
+  };
+
   const handleAttrChange = (attr) => {
     setActiveAttr(attr);
-    // In a multi-attr setup, we'd fetch mitigation for the new attr here
     runMitigation(attr);
   };
 
@@ -131,7 +144,7 @@ export default function RemediatePage() {
                 />
               </div>
               <p className="text-xs text-textSecondary text-center mt-3">
-                Applying Reweighing and Threshold Adjustment...
+                Applying Reweighing and evaluating Threshold Adjustment...
               </p>
             </div>
           </motion.div>
@@ -155,6 +168,8 @@ export default function RemediatePage() {
                 data={mitigation.threshold} 
                 isWinner={mitigation.winner === "threshold"} 
                 winnerReason={mitigation.winner_reason}
+                onRunSimulation={handleRunSimulation}
+                isSimulating={simulating}
               />
             </div>
 

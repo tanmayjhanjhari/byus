@@ -30,6 +30,7 @@ class MitigateRequest(BaseModel):
     target_col: str
     sensitive_attr: str
     model_id: str | None = None
+    simulate_threshold: bool = False
 
 
 @router.post("/mitigate", status_code=status.HTTP_200_OK)
@@ -134,6 +135,8 @@ async def mitigate(
           f"has predict_proba: {callable(getattr(real_model, 'predict_proba', None))})")
     print(f"[Mitigate] df_with_predictions available: {df_with_pred is not None}")
 
+    allow_simulation = bool(body.simulate_threshold)
+
     try:
         mitigation_results = mitigator.run_both(
             df=df,
@@ -145,6 +148,7 @@ async def mitigate(
             baseline_group_stats=baseline_gs,
             model=real_model,
             df_with_pred=df_with_pred,
+            allow_simulation=allow_simulation,
         )
     except Exception as exc:
         raise HTTPException(
@@ -172,6 +176,7 @@ async def mitigate(
     # ── Build response ────────────────────────────────────────────────────────
     response: dict[str, Any] = {
         "session_id": body.session_id,
+        "has_real_model": (real_model is not None),
         "reweigh": _serialise(mitigation_results["reweigh"]),
         "threshold": _serialise(mitigation_results["threshold"]),
         "winner": mitigation_results["winner"],
