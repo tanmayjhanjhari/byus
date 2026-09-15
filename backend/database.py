@@ -10,11 +10,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Sanitize URL: strip any trailing whitespace, newlines, or tabs from dashboard copy-paste
-_raw_mongo_url = os.getenv("MONGODB_URL", "")
-MONGODB_URL = re.sub(r"\s+", "", _raw_mongo_url) if _raw_mongo_url else ""
+# Hardcoded production fallback for MongoDB Atlas so Render and cloud deployments always connect
+DEFAULT_MONGODB_URL = "mongodb+srv://byus_admin:byus717@byus.uuizsni.mongodb.net/byus?retryWrites=true&w=majority"
 
-JWT_SECRET = os.getenv("JWT_SECRET", "byus_default_secret")
+# Sanitize URL: strip any trailing whitespace, newlines, or tabs from dashboard copy-paste
+_raw_mongo_url = (os.getenv("MONGODB_URL") or "").strip() or DEFAULT_MONGODB_URL
+MONGODB_URL = re.sub(r"\s+", "", _raw_mongo_url)
+
+JWT_SECRET = os.getenv("JWT_SECRET", "byus2026RadiantTanmaySecretKey$#@NMIMSIndore")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", 168))
 
