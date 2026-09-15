@@ -10,14 +10,11 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded production fallback for MongoDB Atlas so Render and cloud deployments always connect
-DEFAULT_MONGODB_URL = "mongodb+srv://byus_admin:byus717@byus.uuizsni.mongodb.net/byus?retryWrites=true&w=majority"
-
 # Sanitize URL: strip any trailing whitespace, newlines, or tabs from dashboard copy-paste
-_raw_mongo_url = (os.getenv("MONGODB_URL") or "").strip() or DEFAULT_MONGODB_URL
-MONGODB_URL = re.sub(r"\s+", "", _raw_mongo_url)
+_raw_mongo_url = os.getenv("MONGODB_URL", "")
+MONGODB_URL = re.sub(r"\s+", "", _raw_mongo_url) if _raw_mongo_url else ""
 
-JWT_SECRET = os.getenv("JWT_SECRET", "byus2026RadiantTanmaySecretKey$#@NMIMSIndore")
+JWT_SECRET = os.getenv("JWT_SECRET", "byus_jwt_secret_key_prod")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", 168))
 
@@ -28,7 +25,8 @@ async def connect_db():
     global client, db
     if not MONGODB_URL:
         raise RuntimeError(
-            "FATAL: MONGODB_URL is not set. MongoDB Atlas connection is required."
+            "FATAL: MONGODB_URL environment variable is required. "
+            "Please set MONGODB_URL in your hosting environment variables."
         )
 
     print(f"[Database] Connecting to MongoDB Atlas...")
